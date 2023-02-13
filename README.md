@@ -64,5 +64,12 @@ jid, _ := nq.Enqueue(neoq.Job{
 
 ```
 
+# Example Code
+
+Additional example integration code can be found at https://github.com/acaloiaro/neoq/tree/main/examples
+
+# Status
+
+This project is currently in alpha. Future releases may change the API. It currently leaks some resources. It can handle unimportant workloads.
 
 
