@@ -1,0 +1,5 @@
+Copyright (c) Zenity Labs LLC
+
+Neoq is an Open Source project licensed under the terms of
+the ALGPLv3 license.  Please see <https://www.gnu.org/licenses/agpl-3.0.en.html>
+for license text.
