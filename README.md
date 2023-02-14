@@ -34,7 +34,7 @@ Error handling in this section is excluded for simplicity.
 
 ## Add queue handlers
 
-Queue handlers listen for Jobs on queues. Jobs may consist of any payload that is JSON-serializable. Payloads are stored in Postgres as `jsonb` fields.
+Queue handlers listen for Jobs on queues. Jobs may consist of any payload that is JSON-serializable. Payloads are stored in Postgres in a `jsonb` field.
 
 Queue Handlers are simple Go functions that accept a `Context` parameter.
 
