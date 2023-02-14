@@ -1,3 +1,10 @@
+// Package neoq provides background job processing for Go applications.
+//
+// Neoq's goal is to minimize the infrastructure necessary to add background job processing to Go applications. It does so by implementing queue durability with modular backends, rather than introducing a strict dependency on a particular backend such as Redis.
+//
+// A Postgres backend is provided out of a box. However, for Neoq to meet its goal of reducing the infrastructure
+// necessary to run background jobs -- additional backends are necessary. E.g. Applications that use MySQL, MonogoDB, or
+// Redis as their primary data stores will ideally use Neoq with corresponding backends.
 package neoq
 
 import (
@@ -64,13 +71,17 @@ type Config struct {
 	idleTxTimeout int
 }
 
-// ConfigOption is function that sets optional Neoq configuration
+// ConfigOption is a function that sets optional Neoq configuration
 type ConfigOption func(n Neoq)
 
-// Job contains all the data pertaining to a job
+// Job contains all the data pertaining to jobs
+//
+// Jobs are what are placed on queues for processing.
+//
+// The Fingerprint field can be supplied by the user to impact job deduplication.
 type Job struct {
 	ID          int64          `db:"id"`
-	Fingerprint string         `db:"fingerprint"` // A sha256 sum of the job's payload
+	Fingerprint string         `db:"fingerprint"` // A md5 sum of the job's queue + payload, affects job deduplication
 	Status      string         `db:"status"`      // The status of the job
 	Queue       string         `db:"queue"`       // The queue the job is on
 	Payload     map[string]any `db:"payload"`     // JSON job payload for more complex jobs
@@ -93,6 +104,9 @@ type handlerCtxVars struct {
 // The timeout is the number of milliseconds that a transaction may sit idle before postgres terminates the
 // transaction's underlying connection. The timeout should be longer than your longest job takes to complete. If set
 // too short, job state will become unpredictable, e.g. retry counts may become incorrect.
+//
+// TransactionTimeoutOpt is best set when calling neoq.New() rather than after creation using WithConfigOpt() because this
+// setting results in the creation of a new database connection pool.
 func TransactionTimeoutOpt(txTimeout int) ConfigOption {
 	return func(n Neoq) {
 		n.Config().idleTxTimeout = txTimeout
@@ -132,11 +146,10 @@ func TransactionTimeoutOpt(txTimeout int) ConfigOption {
 				return
 			}
 		}
-
 	}
 }
 
-// JobFromContext fetches the job from a context if it is set
+// JobFromContext fetches the job from a context if the job context variable is already set
 func JobFromContext(ctx context.Context) (j *Job, err error) {
 	if v, ok := ctx.Value(varsKey).(handlerCtxVars); ok {
 		j = v.job
@@ -163,7 +176,7 @@ func txFromContext(ctx context.Context) (t pgx.Tx, err error) {
 	return
 }
 
-// Neoq interface is he primary API for Neoq
+// Neoq interface is Neoq's primary API
 type Neoq interface {
 	// Enqueue queues jobs to be executed asynchronously
 	Enqueue(job Job) (jobID int64, err error)
@@ -172,7 +185,7 @@ type Neoq interface {
 	Listen(queue string, h Handler) (err error)
 
 	// Shutdown halts the worker
-	Shutdown() bool
+	Shutdown() error
 
 	// WithOption configures the instance with optional configuration
 	WithConfigOpt(opt ConfigOption) Neoq
@@ -248,8 +261,10 @@ type pgWorker struct {
 
 // New creates a new Neoq instance for listening to queues and enqueing new jobs
 //
+// If the database does not yet exist, Neoq will attempt to create the database and related tables by default.
+//
 // Connection strings may be a URL or DSN-style connection string to neoq's database. The connection string supports multiple
-// options that can be left empty to use defaults:
+// options detailed below.
 //
 // options:
 // pool_max_conns: integer greater than 0
@@ -259,11 +274,11 @@ type pgWorker struct {
 // pool_health_check_period: duration string
 // pool_max_conn_lifetime_jitter: duration string
 //
-//	# Example DSN
-//	user=worker password=secret host=workerdb.example.com port=5432 dbname=mydb sslmode=verify-ca pool_max_conns=10
+// # Example DSN
+// user=worker password=secret host=workerdb.example.com port=5432 dbname=mydb sslmode=verify-ca pool_max_conns=10
 //
-//	# Example URL
-//	postgres://worker:secret@workerdb.example.com:5432/mydb?sslmode=verify-ca&pool_max_conns=10
+// # Example URL
+// postgres://worker:secret@workerdb.example.com:5432/mydb?sslmode=verify-ca&pool_max_conns=10
 //
 // Available ConfigOption
 // - WithTransactionTimeout(timeout int): configure the idle_in_transaction_timeout for the worker's database
@@ -323,7 +338,7 @@ func (w pgWorker) Config() *Config {
 	return w.config
 }
 
-// initializeTables initializes the tables, types, and indicies necessary to operate Neoq
+// initializeDB initializes the tables, types, and indices necessary to operate Neoq
 func (w pgWorker) initializeDB() (err error) {
 	var pgxCfg *pgx.ConnConfig
 	var tx pgx.Tx
@@ -453,7 +468,7 @@ func (w pgWorker) initializeDB() (err error) {
 	return
 }
 
-// Enqueue queues jobs to be performed by workers
+// Enqueue adds jobs to the specified queue
 func (w pgWorker) Enqueue(job Job) (jobID int64, err error) {
 	ctx := context.Background()
 	conn, err := w.pool.Acquire(ctx)
@@ -479,9 +494,13 @@ func (w pgWorker) Enqueue(job Job) (jobID int64, err error) {
 		job.RunAfter = now
 	}
 
-	jobID, err = w.queueJob(ctx, tx, job)
+	if job.Queue == "" {
+		err = errors.New("this job does not specify a Queue. Please specify a queue")
+		return
+	}
 
-	// if the job ID is empty, then the job was skipped and no additional work is necessary
+	jobID, err = w.enqueueJob(ctx, tx, job)
+
 	if err != nil || jobID == DuplicateJobID {
 		return
 	}
@@ -503,10 +522,12 @@ func (w pgWorker) Enqueue(job Job) (jobID int64, err error) {
 		return
 	}
 
-	return jobID, nil
+	return
 }
 
-// Listen listens for jobs on a queue and processes them
+// Listen sets the queue handler function for the specified queue.
+//
+// Neoq will not process any jobs until Listen() is called at least once.
 func (w pgWorker) Listen(queue string, h Handler) (err error) {
 	w.handlers[queue] = h
 
@@ -517,10 +538,12 @@ func (w pgWorker) Listen(queue string, h Handler) (err error) {
 	return
 }
 
-func (w pgWorker) Shutdown() bool {
+func (w pgWorker) Shutdown() (err error) {
 	w.pool.Close()
 
-	return true
+	err = w.listenConn.Close(context.Background())
+
+	return
 }
 
 func (w pgWorker) WithConfigOpt(opt ConfigOption) Neoq {
@@ -528,10 +551,11 @@ func (w pgWorker) WithConfigOpt(opt ConfigOption) Neoq {
 	return &w
 }
 
-// queueJob adds jobs to the queue, returning the job ID
+// enqueueJob adds jobs to the queue, returning the job ID
+//
 // Jobs that are not already fingerprinted are fingerprinted before being added
 // Duplicate jobs are not added to the queue. Any two unprocessed jobs with the same fingerprint are duplicates
-func (w pgWorker) queueJob(ctx context.Context, tx pgx.Tx, j Job) (jobID int64, err error) {
+func (w pgWorker) enqueueJob(ctx context.Context, tx pgx.Tx, j Job) (jobID int64, err error) {
 
 	// fingerprint the job if it hasn't been fingerprinted already
 	// a fingerprint is the md5 sum of: queue + payload
@@ -754,6 +778,9 @@ func (w pgWorker) scheduleFutureJobs(ctx context.Context, queue string) {
 	}
 }
 
+// annoucneJob announces jobs to queue listeners.
+//
+// Announced jobs are executed by the first worker to respond to the announcement.
 func (w pgWorker) announceJob(ctx context.Context, queue string, jobID int64) {
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
@@ -888,10 +915,13 @@ func (w pgWorker) execHandler(ctx context.Context, handler Handler) (err error) 
 }
 
 // listen uses Postgres LISTEN to listen for jobs on a queue
+// TODO: There is currently no handling for listener disconnects. This will lead to jobs not getting processed until the
+// worker is restarted. Implement disconnect handling.
 func (w pgWorker) listen(ctx context.Context, queue string) (c chan int64) {
 	var err error
 	c = make(chan int64)
 
+	// set this connection's idle in transaction timeout to infinite so it is not intermittently disconnected
 	_, err = w.listenConn.Exec(ctx, fmt.Sprintf("SET idle_in_transaction_session_timeout = '0'; LISTEN %s", queue))
 	if err != nil {
 		log.Println(err)
@@ -935,8 +965,8 @@ func (w pgWorker) getPendingJob(ctx context.Context, tx pgx.Tx, jobID int64) (jo
 	return *j, err
 }
 
-// calculateBackoff calculates tne number of seconds to back off before the next retry
-// this formula is unabashedly taken from Sidekiq because it is good
+// calculateBackoff calculates the number of seconds to back off before the next retry
+// this formula is unabashedly taken from Sidekiq because it is good.
 func calculateBackoff(retryCount int) time.Time {
 	p := int(math.Round(math.Pow(float64(retryCount), 4)))
 	return time.Now().Add(time.Duration(p+15+randInt(30)*retryCount+1) * time.Second)
@@ -950,9 +980,4 @@ func randInt(max int) int {
 func (w pgWorker) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queue string) (jobID int64, err error) {
 	err = conn.QueryRow(ctx, PendingJobIDQuery, queue).Scan(&jobID)
 	return
-}
-
-// utility function for removing cancel functions from a slice cancel function pointers
-func remove(slice []context.CancelCauseFunc, i int) []context.CancelCauseFunc {
-	return append(slice[:i], slice[i+1:]...)
 }
