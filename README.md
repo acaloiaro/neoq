@@ -32,7 +32,7 @@ Additional documentation can be found in the wiki: https://github.com/acaloiaro/
 
 Error handling in this section is excluded for simplicity.
 
-## 1. Add queue handlers
+## Add queue handlers
 
 Queue handlers listen for Jobs on queues. Jobs may consist of any payload that is JSON-serializable. Payloads are stored in Postgres as `jsonb` fields.
 
@@ -49,7 +49,7 @@ nq.Listen("hello_world", neoq.NewHandler(func(ctx context.Context) (err error) {
 }))
 ```
 
-## 2. Queue jobs
+## Enqueue jobs
 
 **Example**: Add a "Hello World" job to the `hello_world` queue
 
