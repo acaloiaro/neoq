@@ -1,6 +1,6 @@
 # Neoq
 
-Background job processing built on Postgres for Go
+Background job processing built on Postgres for Go [![Go Reference](https://pkg.go.dev/badge/github.com/acaloiaro/neoq.svg)](https://pkg.go.dev/github.com/acaloiaro/neoq)
 
 # Installation
 
