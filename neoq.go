@@ -653,7 +653,7 @@ func (w pgWorker) updateJob(ctx context.Context, jobErr error) (err error) {
 		_, err = tx.Exec(ctx, qstr, time.Now(), errMsg, status, job.ID)
 	}
 
-	if err == nil && runAfter.Sub(time.Now()) > 0 {
+	if err == nil && time.Until(runAfter) > 0 {
 		w.mu.Lock()
 		w.futureJobs[job.ID] = runAfter
 		w.mu.Unlock()
