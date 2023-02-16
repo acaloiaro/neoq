@@ -11,7 +11,6 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -27,6 +26,8 @@ import (
 	"github.com/guregu/null"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pkg/errors"
+	"golang.org/x/exp/slog"
 )
 
 type contextKey int
@@ -187,11 +188,23 @@ type Neoq interface {
 	// Shutdown halts the worker
 	Shutdown() error
 
-	// WithOption configures the instance with optional configuration
+	// WithConfigOpt configures neoq with with optional configuration
 	WithConfigOpt(opt ConfigOption) Neoq
 
-	// Config retrieves an instance's configuration
+	// Config retrieves neoq's configuration
 	Config() *Config
+}
+
+// Logger interface is the interface that neoq's logger must implement
+//
+// This interface is a subset of [slog.Logger]. The slog interface was chosen under the assumption that its
+// likely to be Golang's standard library logging interface.
+//
+// TODO: Add WithLogger() and WithLoggerOpt() for user-supplied logger configuration
+type Logger interface {
+	Debug(msg string, args ...any)
+	Error(msg string, err error, args ...any)
+	Info(msg string, args ...any)
 }
 
 // HandlerFunc is a function that Handlers execute for every Job on a queue
@@ -201,8 +214,8 @@ type HandlerFunc func(ctx context.Context) error
 type Handler struct {
 	deadline    time.Duration
 	handle      HandlerFunc
-	maxRetries  int
 	concurrency int
+	logger      Logger
 }
 
 // HandlerOption is function that sets optional configuration for Handlers
@@ -233,7 +246,11 @@ func WithConcurrency(c int) HandlerOption {
 
 // NewHandler creates a new queue handler
 func NewHandler(f HandlerFunc, opts ...HandlerOption) (h Handler) {
-	h = Handler{handle: f, concurrency: runtime.NumCPU() - 1}
+	h = Handler{
+		handle:      f,
+		concurrency: runtime.NumCPU() - 1,
+		logger:      slog.New(slog.NewTextHandler(os.Stdout)),
+	}
 
 	for _, opt := range opts {
 		opt(&h)
@@ -257,6 +274,7 @@ type pgWorker struct {
 	handlers        map[string]Handler  // a map of queue names to queue handlers
 	mu              *sync.Mutex         // mutext to protect mutating state on a pgWorker
 	futureJobs      map[int64]time.Time // map of future job IDs to their due time
+	logger          Logger
 }
 
 // New creates a new Neoq instance for listening to queues and enqueing new jobs
@@ -291,6 +309,7 @@ func New(connection string, opts ...ConfigOption) (n Neoq, err error) {
 		dbConnectString: connection,
 		handlers:        make(map[string]Handler),
 		futureJobs:      make(map[int64]time.Time),
+		logger:          slog.New(slog.NewTextHandler(os.Stdout)),
 	}
 
 	// Set all options
@@ -474,7 +493,6 @@ func (w pgWorker) Enqueue(job Job) (jobID int64, err error) {
 	ctx := context.Background()
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
-		log.Println("failed to acquire database connection to listen for new queue items")
 		return
 	}
 	defer conn.Release()
@@ -708,7 +726,7 @@ func (w pgWorker) start(queue string) (err error) {
 					if err.Error() == "no rows in result set" {
 						err = nil
 					} else {
-						log.Println("error handling job", err)
+						w.logger.Error("error handling job", err, "job_id", jobID)
 					}
 
 					continue
@@ -733,13 +751,13 @@ func (w pgWorker) removeFutureJob(jobID int64) {
 func (w pgWorker) initFutureJobs(ctx context.Context, queue string) {
 	rows, err := w.pool.Query(context.Background(), FutureJobQuery, queue)
 	if err != nil {
-		log.Println("error fetching future jobs list:", err)
+		w.logger.Error("error fetching future jobs list", err)
 		return
 	}
 
 	var id int64
 	var runAfter time.Time
-	_, err = pgx.ForEachRow(rows, []any{&id, &runAfter}, func() error {
+	pgx.ForEachRow(rows, []any{&id, &runAfter}, func() error {
 		w.mu.Lock()
 		w.futureJobs[id] = runAfter
 		w.mu.Unlock()
@@ -759,7 +777,7 @@ func (w pgWorker) scheduleFutureJobs(ctx context.Context, queue string) {
 		// loop over list of future jobs, scheduling goroutines to wait for jobs that are due within the next 30 seconds
 		// TODO: Make 30 seconds configurable
 		for jobID, runAfter := range w.futureJobs {
-			at := runAfter.Sub(time.Now())
+			at := time.Until(runAfter)
 			if at <= time.Duration(30*time.Second) {
 				w.removeFutureJob(jobID)
 				go func(jid int64) {
@@ -785,7 +803,6 @@ func (w pgWorker) scheduleFutureJobs(ctx context.Context, queue string) {
 func (w pgWorker) announceJob(ctx context.Context, queue string, jobID int64) {
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
-		log.Println("failed to acquire database connection to schedule future job")
 		return
 	}
 	defer conn.Release()
@@ -818,7 +835,7 @@ func (w pgWorker) pendingJobs(ctx context.Context, queue string) (jobsCh chan in
 	// TODO Consider refactoring to use pgxpool.AcquireFunc()
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
-		log.Println("failed to acquire database connection to listen for new queue items:", err)
+		w.logger.Error("failed to acquire database connection to listen for pending queue items", err)
 		return
 	}
 
@@ -829,7 +846,7 @@ func (w pgWorker) pendingJobs(ctx context.Context, queue string) (jobsCh chan in
 			jobID, err := w.getPendingJobID(ctx, conn, queue)
 			if err != nil {
 				if err.Error() != "no rows in result set" {
-					log.Println(err)
+					w.logger.Error("failed to fetch pending job", err, "job_id", jobID)
 				} else {
 					// done fetching pending jobs
 					break
@@ -852,7 +869,6 @@ func (w pgWorker) handleJob(ctx context.Context, jobID int64, handler Handler) (
 	var tx pgx.Tx
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
-		log.Println("failed to acquire database connection to process jobs")
 		return
 	}
 	defer conn.Release()
@@ -882,13 +898,13 @@ func (w pgWorker) handleJob(ctx context.Context, jobID int64, handler Handler) (
 	handlerErr := w.execHandler(ctx, handler)
 	err = w.updateJob(ctx, handlerErr)
 	if err != nil {
-		log.Println("error updating job status:", err)
+		err = errors.Wrap(err, "error updating job status")
 		return
 	}
 
 	err = tx.Commit(ctx)
 	if err != nil {
-		log.Printf("unable to commit transaction for job '%d': work may be duplicated if retried", job.ID)
+		w.logger.Error("unable to commit job transaction. retrying this job may dupliate work", err, "job_id", job.ID)
 	}
 
 	return
@@ -925,7 +941,7 @@ func (w pgWorker) listen(ctx context.Context, queue string) (c chan int64) {
 	// set this connection's idle in transaction timeout to infinite so it is not intermittently disconnected
 	_, err = w.listenConn.Exec(ctx, fmt.Sprintf("SET idle_in_transaction_session_timeout = '0'; LISTEN %s", queue))
 	if err != nil {
-		log.Println(err)
+		w.logger.Error("unable to create database connection for listener", err)
 		return
 	}
 
@@ -933,14 +949,14 @@ func (w pgWorker) listen(ctx context.Context, queue string) (c chan int64) {
 		for {
 			notification, waitErr := w.listenConn.WaitForNotification(ctx)
 			if waitErr != nil {
-				log.Println("failed to wait for notification:", waitErr)
+				w.logger.Error("failed to wait for notification", waitErr)
 				time.Sleep(1 * time.Second)
 				continue
 			}
 
 			var jobID int64
 			if jobID, err = strconv.ParseInt(notification.Payload, 0, 64); err != nil {
-				log.Println("unable to fetch job:", err)
+				w.logger.Error("unable to fetch job", err)
 				continue
 			}
 

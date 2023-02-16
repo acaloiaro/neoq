@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"testing"
 	"time"
+
+	"golang.org/x/exp/slog"
 )
 
 func TestWorkerListenConn(t *testing.T) {
@@ -20,8 +21,9 @@ func TestWorkerListenConn(t *testing.T) {
 	numJobs := 1
 	var done = make(chan bool, numJobs)
 	handler := NewHandler(func(ctx context.Context) (err error) {
-		j, err := JobFromContext(ctx)
-		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
+		var j *Job
+		j, err = JobFromContext(ctx)
+		slog.Info("got job", "id", j.ID, "messsage", j.Payload["message"])
 		done <- true
 		return
 	})
@@ -42,7 +44,7 @@ func TestWorkerListenConn(t *testing.T) {
 		jid, err := nq.Enqueue(Job{
 			Queue: queue,
 			Payload: map[string]interface{}{
-				"message": fmt.Sprintf("hello world: %d", 100),
+				"message": fmt.Sprintf("hello world: %d", i),
 			},
 		})
 		if err != nil || jid == -1 {
