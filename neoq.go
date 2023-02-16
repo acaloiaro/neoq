@@ -454,9 +454,10 @@ func (w pgWorker) initializeDB() (err error) {
 
 			CREATE INDEX neoq_job_fetcher_idx ON neoq_jobs (id, status, run_after);
 			CREATE INDEX neoq_jobs_fetcher_idx ON neoq_jobs (queue, status, run_after);
+			CREATE INDEX neoq_jobs_fingerprint_idx ON neoq_jobs (fingerprint, status);
 		`
 
-		_, err := tx.Exec(ctx, createTablesQ)
+		_, err = tx.Exec(ctx, createTablesQ)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "unable to create job status enum: %v", err)
 			return err
