@@ -199,10 +199,10 @@ type HandlerFunc func(ctx context.Context) error
 
 // Handler handles jobs on a queue
 type Handler struct {
-	Deadline    time.Duration
-	Handle      HandlerFunc
-	MaxRetries  int
-	Concurrency int
+	deadline    time.Duration
+	handle      HandlerFunc
+	maxRetries  int
+	concurrency int
 }
 
 // HandlerOption is function that sets optional configuration for Handlers
@@ -219,7 +219,7 @@ func (h Handler) WithOption(opt HandlerOption) (handler Handler) {
 // when the deadline is exceeded, jobs are failed and begin the retry phase of their lifecycle
 func WithDeadline(d time.Duration) HandlerOption {
 	return func(h *Handler) {
-		h.Deadline = d
+		h.deadline = d
 	}
 }
 
@@ -227,21 +227,21 @@ func WithDeadline(d time.Duration) HandlerOption {
 // the default concurrency is the number of (v)CPUs on the machine running Neoq
 func WithConcurrency(c int) HandlerOption {
 	return func(h *Handler) {
-		h.Concurrency = c
+		h.concurrency = c
 	}
 }
 
 // NewHandler creates a new queue handler
 func NewHandler(f HandlerFunc, opts ...HandlerOption) (h Handler) {
-	h = Handler{Handle: f, Concurrency: runtime.NumCPU() - 1}
+	h = Handler{handle: f, concurrency: runtime.NumCPU() - 1}
 
 	for _, opt := range opts {
 		opt(&h)
 	}
 
 	// always set a job deadline if none is set
-	if h.Deadline == 0 {
-		h.Deadline = time.Duration(DefaultHandlerDeadline * time.Millisecond)
+	if h.deadline == 0 {
+		h.deadline = time.Duration(DefaultHandlerDeadline * time.Millisecond)
 	}
 
 	return
@@ -690,7 +690,7 @@ func (w pgWorker) start(queue string) (err error) {
 	// the current implementation is a brute force proof of concept that can certainly be improved upon
 	go func() { w.scheduleFutureJobs(ctx, queue) }()
 
-	for i := 0; i < handler.Concurrency; i++ {
+	for i := 0; i < handler.concurrency; i++ {
 		go func() {
 			var jobID int64
 
@@ -896,12 +896,12 @@ func (w pgWorker) handleJob(ctx context.Context, jobID int64, handler Handler) (
 
 // exechandler executes handler functions with a concrete time deadline
 func (w pgWorker) execHandler(ctx context.Context, handler Handler) (err error) {
-	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(handler.Deadline))
+	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(handler.deadline))
 	defer cancel()
 
 	var done = make(chan bool)
 	go func(ctx context.Context) {
-		err = handler.Handle(ctx)
+		err = handler.handle(ctx)
 		done <- true
 	}(ctx)
 
@@ -909,7 +909,7 @@ func (w pgWorker) execHandler(ctx context.Context, handler Handler) (err error) 
 	case <-done:
 		return
 	case <-deadlineCtx.Done():
-		err = fmt.Errorf("job exceeded its %s deadline", handler.Deadline)
+		err = fmt.Errorf("job exceeded its %s deadline", handler.deadline)
 	}
 
 	return
