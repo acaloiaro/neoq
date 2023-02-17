@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"testing"
 	"time"
-
-	"golang.org/x/exp/slog"
 )
 
 func TestWorkerListenConn(t *testing.T) {
 	const queue = "foobar"
-	nq, err := New("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable")
+	pgBackend, err := NewPgBackend("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nq, err := New(Backend(pgBackend))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +27,7 @@ func TestWorkerListenConn(t *testing.T) {
 	handler := NewHandler(func(ctx context.Context) (err error) {
 		var j *Job
 		j, err = JobFromContext(ctx)
-		slog.Info("got job", "id", j.ID, "messsage", j.Payload["message"])
+		log.Println("queue:", j.Queue, "got job", "id:", j.ID, "messsage:", j.Payload["message"])
 		done <- true
 		return
 	})
@@ -85,7 +89,7 @@ func TestWorkerListenConn(t *testing.T) {
 
 func TestWorkerListenCron(t *testing.T) {
 	const cron = "* * * * * *"
-	nq, err := New("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable")
+	nq, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,10 +97,11 @@ func TestWorkerListenCron(t *testing.T) {
 	jobRan := false
 	var done = make(chan bool)
 	handler := NewHandler(func(ctx context.Context) (err error) {
-		slog.Info("got periodic job")
+		log.Println("got periodic job")
 		done <- true
 		return
 	})
+
 	handler = handler.
 		WithOption(HandlerDeadlineOpt(time.Duration(500 * time.Millisecond))).
 		WithOption(HandlerConcurrencyOpt(1))
@@ -123,5 +128,4 @@ func TestWorkerListenCron(t *testing.T) {
 	if !jobRan {
 		t.Error(err)
 	}
-
 }

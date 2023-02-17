@@ -42,7 +42,7 @@ Queue Handlers are simple Go functions that accept a `Context` parameter.
 **Example**: Add a listener on the `hello_world` queue
 
 ```go
-nq, _ := neoq.New("postgres://username:password@127.0.0.1:5432/neoq?sslmode=disable")
+nq, _ := neoq.New(neoq.ConnectionString("postgres://postgres:postgres@localhost:5432/neoq?sslmode=disable"))
 nq.Listen("hello_world", neoq.NewHandler(func(ctx context.Context) (err error) {
   j, err := neoq.JobFromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
@@ -55,7 +55,7 @@ nq.Listen("hello_world", neoq.NewHandler(func(ctx context.Context) (err error) {
 **Example**: Add a "Hello World" job to the `hello_world` queue
 
 ```go
-nq, _ := neoq.New("postgres://username:password@127.0.0.1:5432/neoq?sslmode=disable")
+nq, _ := neoq.New(neoq.ConnectionString("postgres://postgres:postgres@localhost:5432/neoq?sslmode=disable"))
 jid, _ := nq.Enqueue(neoq.Job{
   Queue: "hello_world",
   Payload: map[string]interface{}{

@@ -11,11 +11,11 @@ import (
 func main() {
 	var err error
 	const queue = "foobar"
-	//
-	nq, _ := neoq.New(
-		"postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable",
-		neoq.TransactionTimeoutOpt(1000), // transactions may be idle up to one second
-	)
+
+	// by default neoq connects to a local postgres server using: [neoq.DefaultPgConnectionString]
+	// connection strings can be set explicitly as follows:
+	// neoq.New(neoq.ConnectionString("postgres://username:passsword@hostname/database"))
+	nq, _ := neoq.New()
 
 	// we use a done channel here to make sure that our test doesn't exit before the job finishes running
 	// this is probably not a pattern you want to use in production jobs and you see it here only for testing reasons

@@ -9,7 +9,7 @@ import (
 
 func main() {
 	const queue = "foobar"
-	nq, _ := neoq.New("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable", neoq.TransactionTimeoutOpt(1000))
+	nq, _ := neoq.New(neoq.PgTransactionTimeoutOpt(1000))
 
 	// Add a job that will execute 1 hour from now
 	jobID, err := nq.Enqueue(neoq.Job{

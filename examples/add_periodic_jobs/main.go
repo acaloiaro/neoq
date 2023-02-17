@@ -9,7 +9,10 @@ import (
 )
 
 func main() {
-	nq, _ := neoq.New("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable", neoq.TransactionTimeoutOpt(1000))
+	// by default neoq connects to a local postgres server using: [neoq.DefaultPgConnectionString]
+	// connection strings can be set explicitly as follows:
+	// neoq.New(neoq.ConnectionString("postgres://username:passsword@hostname/database"))
+	nq, _ := neoq.New(neoq.PgTransactionTimeoutOpt(1000))
 	// run a job periodically
 	handler := neoq.NewHandler(func(ctx context.Context) (err error) {
 		log.Println("running periodic job")
