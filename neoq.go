@@ -215,7 +215,6 @@ type Handler struct {
 	deadline    time.Duration
 	handle      HandlerFunc
 	concurrency int
-	logger      Logger
 }
 
 // HandlerOption is function that sets optional configuration for Handlers
@@ -249,7 +248,6 @@ func NewHandler(f HandlerFunc, opts ...HandlerOption) (h Handler) {
 	h = Handler{
 		handle:      f,
 		concurrency: runtime.NumCPU() - 1,
-		logger:      slog.New(slog.NewTextHandler(os.Stdout)),
 	}
 
 	for _, opt := range opts {
@@ -515,6 +513,7 @@ func (w pgWorker) Enqueue(job Job) (jobID int64, err error) {
 
 	if job.Queue == "" {
 		err = errors.New("this job does not specify a Queue. Please specify a queue")
+
 		return
 	}
 
@@ -905,6 +904,7 @@ func (w pgWorker) handleJob(ctx context.Context, jobID int64, handler Handler) (
 	err = tx.Commit(ctx)
 	if err != nil {
 		w.logger.Error("unable to commit job transaction. retrying this job may dupliate work", err, "job_id", job.ID)
+		err = errors.Wrap(err, "unable to commit job transaction. retrying this job may dupliate work")
 	}
 
 	return
