@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"time"
 
 	"github.com/acaloiaro/neoq"
 )
@@ -12,14 +11,10 @@ func main() {
 	var err error
 	const queue = "foobar"
 	//
-	nq, _ := neoq.New(
-		"postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable",
-		neoq.TransactionTimeoutOpt(1000), // transactions may be idle up to one second
-	)
+	nq, _ := neoq.New("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable")
 
 	handler := neoq.NewHandler(func(ctx context.Context) (err error) {
 		var j *neoq.Job
-		time.Sleep(1 * time.Second)
 		j, err = neoq.JobFromContext(ctx)
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
 		return

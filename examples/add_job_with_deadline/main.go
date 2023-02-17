@@ -38,7 +38,6 @@ func main() {
 		log.Println("error listening to queue", err)
 	}
 
-	// Add a job that will execute 1 hour from now
 	_, err = nq.Enqueue(neoq.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
