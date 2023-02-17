@@ -17,10 +17,11 @@ Neoq does not aim to be the _fastest_ background job processor. It aims to be _f
 # Features
 
 - **Postgres-backed** job processing
-- **Job uniqueness**: jobs are fingerprinted based on their payload and status to prevent job duplication (multiple unprocessed jobs with the same payload cannot be queued)
 - **Retries**: Jobs may be retried a configurable number of times with exponential backoff and jitter to prevent thundering herds
+- **Job uniqueness**: jobs are fingerprinted based on their payload and status to prevent job duplication (multiple unprocessed jobs with the same payload cannot be queued)
 - **Deadlines**: Queue handlers can be configured with per-job time deadlines with millisecond accuracy
 - **Configurable transaction idle time**: Don't let your background worker transactions run away with db resources. By default, worker transactions may idle for 60 seconds.
+- **Periodic Jobs**: Jobs can be scheduled periodically using standard cron syntax
 - **Future Jobs**: Jobs can be scheduled either for the future or immediate execution
 - **Concurrency**: Concurrency is configurable for every queue
 

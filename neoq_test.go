@@ -82,3 +82,46 @@ func TestWorkerListenConn(t *testing.T) {
 	}
 
 }
+
+func TestWorkerListenCron(t *testing.T) {
+	const cron = "* * * * * *"
+	nq, err := New("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jobRan := false
+	var done = make(chan bool)
+	handler := NewHandler(func(ctx context.Context) (err error) {
+		slog.Info("got periodic job")
+		done <- true
+		return
+	})
+	handler = handler.
+		WithOption(HandlerDeadlineOpt(time.Duration(500 * time.Millisecond))).
+		WithOption(HandlerConcurrencyOpt(1))
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	nq.ListenCron(cron, handler)
+
+	// allow time for listener to start
+	time.Sleep(50 * time.Millisecond)
+
+	select {
+	case <-time.After(5 * time.Second):
+		err = errors.New("timed out waiting for periodic job")
+	case <-done:
+		jobRan = true
+	}
+
+	// Allow time for job status to be updated in the database
+	time.Sleep(50 * time.Millisecond)
+
+	if !jobRan {
+		t.Error(err)
+	}
+
+}

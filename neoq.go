@@ -7,6 +7,9 @@
 // Redis as their primary data stores will ideally use Neoq with corresponding backends.
 package neoq
 
+// TODO dependencies to factor out
+// "github.com/iancoleman/strcase"
+// "github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 import (
 	"context"
 	"crypto/md5"
@@ -18,15 +21,19 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"math/rand"
 
 	"github.com/guregu/null"
+	"github.com/iancoleman/strcase"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 	"github.com/pkg/errors"
+	"github.com/robfig/cron"
 	"golang.org/x/exp/slog"
 )
 
@@ -179,20 +186,25 @@ func txFromContext(ctx context.Context) (t pgx.Tx, err error) {
 
 // Neoq interface is Neoq's primary API
 type Neoq interface {
+	// Config retrieves neoq's configuration
+	Config() *Config
+
 	// Enqueue queues jobs to be executed asynchronously
 	Enqueue(job Job) (jobID int64, err error)
 
 	// Listen listens for jobs on a queue and processes them with the given handler
 	Listen(queue string, h Handler) (err error)
 
+	// ListenCron listens for jobs on a cron schedule and processes them with the given handler
+	//
+	// See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
+	ListenCron(cron string, h Handler) (err error)
+
 	// Shutdown halts the worker
 	Shutdown() error
 
 	// WithConfigOpt configures neoq with with optional configuration
 	WithConfigOpt(opt ConfigOption) Neoq
-
-	// Config retrieves neoq's configuration
-	Config() *Config
 }
 
 // Logger interface is the interface that neoq's logger must implement
@@ -265,6 +277,7 @@ func NewHandler(f HandlerFunc, opts ...HandlerOption) (h Handler) {
 // pgWorker is a concrete Neoq implementation based on Postgres, using pgx/pgxpool
 type pgWorker struct {
 	config          *Config
+	cron            *cron.Cron
 	dbConnectString string
 	idleTxTimeout   int
 	listenConn      *pgx.Conn
@@ -308,7 +321,9 @@ func New(connection string, opts ...ConfigOption) (n Neoq, err error) {
 		handlers:        make(map[string]Handler),
 		futureJobs:      make(map[int64]time.Time),
 		logger:          slog.New(slog.NewTextHandler(os.Stdout)),
+		cron:            cron.New(),
 	}
+	w.cron.Start()
 
 	// Set all options
 	for _, opt := range opts {
@@ -545,7 +560,7 @@ func (w pgWorker) Enqueue(job Job) (jobID int64, err error) {
 
 // Listen sets the queue handler function for the specified queue.
 //
-// Neoq will not process any jobs until Listen() is called at least once.
+// Neoq will not process any queues until Listen() is called at least once.
 func (w pgWorker) Listen(queue string, h Handler) (err error) {
 	w.handlers[queue] = h
 
@@ -556,8 +571,33 @@ func (w pgWorker) Listen(queue string, h Handler) (err error) {
 	return
 }
 
+// ListenCron listens for jobs on a cron schedule and handles them with the provided handler
+//
+// See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
+func (w pgWorker) ListenCron(cronSpec string, h Handler) (err error) {
+	cd, err := crondescriptor.NewCronDescriptor(cronSpec)
+	if err != nil {
+		return err
+	}
+
+	cdStr, err := cd.GetDescription(crondescriptor.Full)
+	if err != nil {
+		return err
+	}
+
+	queue := stripNonAlphanum(strcase.ToSnake(*cdStr))
+	w.cron.AddFunc(cronSpec, func() {
+		w.Enqueue(Job{Queue: queue})
+	})
+
+	err = w.Listen(queue, h)
+
+	return
+}
+
 func (w pgWorker) Shutdown() (err error) {
 	w.pool.Close()
+	w.cron.Stop()
 
 	err = w.listenConn.Close(context.Background())
 
@@ -796,7 +836,7 @@ func (w pgWorker) scheduleFutureJobs(ctx context.Context, queue string) {
 	}
 }
 
-// annoucneJob announces jobs to queue listeners.
+// announceJob announces jobs to queue listeners.
 //
 // Announced jobs are executed by the first worker to respond to the announcement.
 func (w pgWorker) announceJob(ctx context.Context, queue string, jobID int64) {
@@ -941,7 +981,9 @@ func (w pgWorker) listen(ctx context.Context, queue string) (c chan int64) {
 	// set this connection's idle in transaction timeout to infinite so it is not intermittently disconnected
 	_, err = w.listenConn.Exec(ctx, fmt.Sprintf("SET idle_in_transaction_session_timeout = '0'; LISTEN %s", queue))
 	if err != nil {
-		w.logger.Error("unable to create database connection for listener", err)
+		msg := "unable to create database connection for listener"
+		err = errors.Wrap(err, msg)
+		w.logger.Error(msg, err)
 		return
 	}
 
@@ -982,6 +1024,11 @@ func (w pgWorker) getPendingJob(ctx context.Context, tx pgx.Tx, jobID int64) (jo
 	return *j, err
 }
 
+func (w pgWorker) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queue string) (jobID int64, err error) {
+	err = conn.QueryRow(ctx, PendingJobIDQuery, queue).Scan(&jobID)
+	return
+}
+
 // calculateBackoff calculates the number of seconds to back off before the next retry
 // this formula is unabashedly taken from Sidekiq because it is good.
 func calculateBackoff(retryCount int) time.Time {
@@ -994,7 +1041,17 @@ func randInt(max int) int {
 	return rand.Intn(max)
 }
 
-func (w pgWorker) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queue string) (jobID int64, err error) {
-	err = conn.QueryRow(ctx, PendingJobIDQuery, queue).Scan(&jobID)
-	return
+func stripNonAlphanum(s string) string {
+	var result strings.Builder
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if (b == '_') ||
+			('a' <= b && b <= 'z') ||
+			('A' <= b && b <= 'Z') ||
+			('0' <= b && b <= '9') ||
+			b == ' ' {
+			result.WriteByte(b)
+		}
+	}
+	return result.String()
 }
