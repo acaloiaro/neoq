@@ -226,18 +226,18 @@ func (h Handler) WithOption(opt HandlerOption) (handler Handler) {
 	return h
 }
 
-// WithDeadline configures handlers with a deadline for every job that it excutes
+// HandlerDeadlineOpt configures handlers with a deadline for every job that it excutes
 // The deadline is the amount of time (ms) that can be spent executing the handler's HandlerFunction
 // when the deadline is exceeded, jobs are failed and begin the retry phase of their lifecycle
-func WithDeadline(d time.Duration) HandlerOption {
+func HandlerDeadlineOpt(d time.Duration) HandlerOption {
 	return func(h *Handler) {
 		h.deadline = d
 	}
 }
 
-// WithConcurrency configures Neoq handlers to process jobs concurrently
+// HandlerConcurrencyOpt configures Neoq handlers to process jobs concurrently
 // the default concurrency is the number of (v)CPUs on the machine running Neoq
-func WithConcurrency(c int) HandlerOption {
+func HandlerConcurrencyOpt(c int) HandlerOption {
 	return func(h *Handler) {
 		h.concurrency = c
 	}

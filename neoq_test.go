@@ -28,8 +28,8 @@ func TestWorkerListenConn(t *testing.T) {
 		return
 	})
 	handler = handler.
-		WithOption(WithDeadline(time.Duration(200 * time.Millisecond))).
-		WithOption(WithConcurrency(8))
+		WithOption(HandlerDeadlineOpt(time.Duration(500 * time.Millisecond))).
+		WithOption(HandlerConcurrencyOpt(1))
 
 	if err != nil {
 		t.Error(err)
@@ -38,7 +38,8 @@ func TestWorkerListenConn(t *testing.T) {
 	// Listen for jobs on the queue
 	nq.Listen(queue, handler)
 
-	time.Sleep(250 * time.Millisecond)
+	// allow time for listener to start
+	time.Sleep(50 * time.Millisecond)
 
 	for i := 0; i < numJobs; i++ {
 		jid, err := nq.Enqueue(Job{
@@ -59,7 +60,6 @@ func TestWorkerListenConn(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			timeout = true
 			err = errors.New("timed out waiting for job")
-			break
 		case <-done:
 			doneCnt++
 		}

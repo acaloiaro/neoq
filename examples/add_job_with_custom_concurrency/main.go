@@ -25,10 +25,10 @@ func main() {
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
 		done <- true
 		return
-	}, neoq.WithConcurrency(8))
+	}, neoq.HandlerConcurrencyOpt(8))
 
 	// Option 2: Set options after the handler is created
-	handler = handler.WithOption(neoq.WithConcurrency(8))
+	handler = handler.WithOption(neoq.HandlerConcurrencyOpt(8))
 
 	err = nq.Listen(queue, handler)
 	if err != nil {
