@@ -55,7 +55,7 @@ type PgBackend struct {
 // Available ConfigOption
 // - WithTransactionTimeout(timeout int): configure the idle_in_transaction_timeout for the worker's database
 // connection(s)
-func NewPgBackend(connectString string, opts ...ConfigOption) (n Neoq, err error) {
+func NewPgBackend(ctx context.Context, connectString string, opts ...ConfigOption) (n Neoq, err error) {
 	w := PgBackend{
 		mu:         &sync.Mutex{},
 		config:     &pgConfig{connectString: connectString},
@@ -71,7 +71,7 @@ func NewPgBackend(connectString string, opts ...ConfigOption) (n Neoq, err error
 		opt(&w)
 	}
 
-	err = w.initializeDB()
+	err = w.initializeDB(ctx)
 	if err != nil {
 		return
 	}
@@ -96,7 +96,7 @@ func NewPgBackend(connectString string, opts ...ConfigOption) (n Neoq, err error
 			return
 		}
 
-		w.pool, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
+		w.pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
 			return
 		}
@@ -114,17 +114,16 @@ type pgConfig struct {
 }
 
 // initializeDB initializes the tables, types, and indices necessary to operate Neoq
-func (w PgBackend) initializeDB() (err error) {
+func (w PgBackend) initializeDB(ctx context.Context) (err error) {
 	var pgxCfg *pgx.ConnConfig
 	var tx pgx.Tx
-	ctx := context.Background()
 	pgxCfg, err = pgx.ParseConfig(w.config.connectString)
 	if err != nil {
 		return
 	}
 
 	connectStr := fmt.Sprintf("postgres://%s:%s@%s", pgxCfg.User, pgxCfg.Password, pgxCfg.Host)
-	conn, err := pgx.Connect(context.Background(), connectStr)
+	conn, err := pgx.Connect(ctx, connectStr)
 	if err != nil {
 		w.logger.Error("unableto connect to database", err)
 		return
@@ -133,7 +132,7 @@ func (w PgBackend) initializeDB() (err error) {
 
 	var dbExists bool
 	dbExistsQ := fmt.Sprintf(`SELECT EXISTS (SELECT datname FROM pg_catalog.pg_database WHERE datname = '%s');`, pgxCfg.Database)
-	rows, err := conn.Query(context.Background(), dbExistsQ)
+	rows, err := conn.Query(ctx, dbExistsQ)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "unable to determne if jobs table exists: %v", err)
 		return
@@ -148,7 +147,7 @@ func (w PgBackend) initializeDB() (err error) {
 	defer rows.Close()
 
 	conn.Close(ctx)
-	conn, err = pgx.Connect(context.Background(), connectStr)
+	conn, err = pgx.Connect(ctx, connectStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
 		os.Exit(1)
@@ -164,7 +163,7 @@ func (w PgBackend) initializeDB() (err error) {
 		}
 	}
 
-	conn, err = pgx.ConnectConfig(context.Background(), pgxCfg)
+	conn, err = pgx.ConnectConfig(ctx, pgxCfg)
 	if err != nil {
 		return
 	}
@@ -181,7 +180,7 @@ func (w PgBackend) initializeDB() (err error) {
 				schemaname = 'public' AND
 				tablename  = 'neoq_jobs'
     );`
-	rows, err = tx.Query(context.Background(), jobsTableExistsQ)
+	rows, err = tx.Query(ctx, jobsTableExistsQ)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "unable to determne if jobs table exists: %v", err)
 		return
@@ -249,8 +248,7 @@ func (w PgBackend) initializeDB() (err error) {
 }
 
 // Enqueue adds jobs to the specified queue
-func (w PgBackend) Enqueue(job Job) (jobID int64, err error) {
-	ctx := context.Background()
+func (w PgBackend) Enqueue(ctx context.Context, job Job) (jobID int64, err error) {
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
 		return
@@ -308,12 +306,12 @@ func (w PgBackend) Enqueue(job Job) (jobID int64, err error) {
 // Listen sets the queue handler function for the specified queue.
 //
 // Neoq will not process any queues until Listen() is called at least once.
-func (w PgBackend) Listen(queue string, h Handler) (err error) {
+func (w PgBackend) Listen(ctx context.Context, queue string, h Handler) (err error) {
 	w.mu.Lock()
 	w.handlers[queue] = h
 	w.mu.Unlock()
 
-	err = w.start(queue)
+	err = w.start(ctx, queue)
 	if err != nil {
 		return
 	}
@@ -323,7 +321,7 @@ func (w PgBackend) Listen(queue string, h Handler) (err error) {
 // ListenCron listens for jobs on a cron schedule and handles them with the provided handler
 //
 // See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
-func (w PgBackend) ListenCron(cronSpec string, h Handler) (err error) {
+func (w PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) (err error) {
 	cd, err := crondescriptor.NewCronDescriptor(cronSpec)
 	if err != nil {
 		return err
@@ -336,19 +334,19 @@ func (w PgBackend) ListenCron(cronSpec string, h Handler) (err error) {
 
 	queue := stripNonAlphanum(strcase.ToSnake(*cdStr))
 	w.cron.AddFunc(cronSpec, func() {
-		w.Enqueue(Job{Queue: queue})
+		w.Enqueue(ctx, Job{Queue: queue})
 	})
 
-	err = w.Listen(queue, h)
+	err = w.Listen(ctx, queue, h)
 
 	return
 }
 
-func (w PgBackend) Shutdown() (err error) {
+func (w PgBackend) Shutdown(ctx context.Context) (err error) {
 	w.pool.Close()
 	w.cron.Stop()
 
-	err = w.listenConn.Close(context.Background())
+	err = w.listenConn.Close(ctx)
 
 	return
 }
@@ -470,14 +468,12 @@ func (w PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 }
 
 // start starts a queue listener, processes pending job, and fires up goroutines to process future jobs
-func (w PgBackend) start(queue string) (err error) {
-
+func (w PgBackend) start(ctx context.Context, queue string) (err error) {
 	var handler Handler
 	var ok bool
 	if handler, ok = w.handlers[queue]; !ok {
 		return fmt.Errorf("no handler for queue: %s", queue)
 	}
-	ctx := context.Background()
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
 		return
@@ -542,7 +538,7 @@ func (w PgBackend) removeFutureJob(jobID int64) {
 // initFutureJobs is intended to be run once to initialize the list of future jobs that must be monitored for
 // execution. it should be run only during system startup.
 func (w PgBackend) initFutureJobs(ctx context.Context, queue string) {
-	rows, err := w.pool.Query(context.Background(), FutureJobQuery, queue)
+	rows, err := w.pool.Query(ctx, FutureJobQuery, queue)
 	if err != nil {
 		w.logger.Error("error fetching future jobs list", err)
 		return

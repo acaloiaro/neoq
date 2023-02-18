@@ -42,8 +42,9 @@ Queue Handlers are simple Go functions that accept a `Context` parameter.
 **Example**: Add a listener on the `hello_world` queue
 
 ```go
-nq, _ := neoq.New(neoq.ConnectionString("postgres://postgres:postgres@localhost:5432/neoq"))
-nq.Listen("hello_world", neoq.NewHandler(func(ctx context.Context) (err error) {
+nq, err := neoq.New(ctx, neoq.ConnectionString("postgres://postgres:postgres@localhost:5432/neoq"))
+handleErr(err)
+nq.Listen(ctx, "hello_world", neoq.NewHandler(func(ctx context.Context) (err error) {
   j, err := neoq.JobFromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
   return
@@ -55,14 +56,16 @@ nq.Listen("hello_world", neoq.NewHandler(func(ctx context.Context) (err error) {
 **Example**: Add a "Hello World" job to the `hello_world` queue
 
 ```go
-nq, _ := neoq.New(neoq.ConnectionString("postgres://postgres:postgres@localhost:5432/neoq"))
-jid, _ := nq.Enqueue(neoq.Job{
+nq, err := neoq.New(ctx, neoq.ConnectionString("postgres://postgres:postgres@localhost:5432/neoq"))
+handleErr(err)
+
+jid, err := nq.Enqueue(ctx, neoq.Job{
   Queue: "hello_world",
   Payload: map[string]interface{}{
     "message": "hello world",
   },
 })
-
+handleErr(err)
 ```
 
 # Example Code
@@ -72,5 +75,3 @@ Additional example integration code can be found at https://github.com/acaloiaro
 # Status
 
 This project is currently in alpha. Future releases may change the API. It currently leaks some resources. It can handle unimportant workloads.
-
-

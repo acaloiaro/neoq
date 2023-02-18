@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -9,10 +10,14 @@ import (
 
 func main() {
 	const queue = "foobar"
-	nq, _ := neoq.New(neoq.PgTransactionTimeoutOpt(1000))
+	ctx := context.Background()
+	nq, err := neoq.New(ctx, neoq.PgTransactionTimeoutOpt(1000))
+	if err != nil {
+		log.Fatalf("error initializing neoq: %v", err)
+	}
 
 	// Add a job that will execute 1 hour from now
-	jobID, err := nq.Enqueue(neoq.Job{
+	jobID, err := nq.Enqueue(ctx, neoq.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
 			"message": "hello, future world",
@@ -20,7 +25,7 @@ func main() {
 		RunAfter: time.Now().Add(1 * time.Hour),
 	})
 	if err != nil {
-		log.Println("error adding job", err)
+		log.Fatalf("error adding job: %v", err)
 	}
 
 	log.Println("added job:", jobID)
