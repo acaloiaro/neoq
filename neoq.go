@@ -242,7 +242,7 @@ func ConnectionString(connectionString string) ConfigOption {
 		switch c := n.(type) {
 		case *internalConfig:
 			c.connectionString = connectionString
-		case *NeoqPg:
+		case *PgBackend:
 			c.config.connectString = connectionString
 		default:
 		}
