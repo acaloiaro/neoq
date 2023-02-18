@@ -34,8 +34,8 @@ const (
 	JobStatusFailed    = "failed"
 
 	DefaultPgConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
-	DefaultTransactionTimeout = 60000 //ms
-	DefaultHandlerDeadline    = 30000 //ms
+	DefaultTransactionTimeout = time.Minute
+	DefaultHandlerDeadline    = 30 * time.Second
 	DuplicateJobID            = -1
 	postgresBackendName       = "postgres"
 
@@ -144,7 +144,7 @@ func NewHandler(f HandlerFunc, opts ...HandlerOption) (h Handler) {
 
 	// always set a job deadline if none is set
 	if h.deadline == 0 {
-		h.deadline = time.Duration(DefaultHandlerDeadline * time.Millisecond)
+		h.deadline = DefaultHandlerDeadline
 	}
 
 	return
