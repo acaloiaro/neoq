@@ -11,7 +11,7 @@ import (
 
 func TestWorkerListenConn(t *testing.T) {
 	const queue = "foobar"
-	pgBackend, err := NewPgBackend("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable")
+	pgBackend, err := NewPgBackend("postgres://postgres:postgres@127.0.0.1:5432/neoq")
 	if err != nil {
 		t.Fatal(err)
 	}

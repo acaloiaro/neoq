@@ -11,7 +11,7 @@ func main() {
 	var err error
 	const queue = "foobar"
 	//
-	nq, _ := neoq.New("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable")
+	nq, _ := neoq.New(neoq.ConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"))
 
 	handler := neoq.NewHandler(func(ctx context.Context) (err error) {
 		var j *neoq.Job
