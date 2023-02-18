@@ -100,9 +100,9 @@ type HandlerFunc func(ctx context.Context) error
 
 // Handler handles jobs on a queue
 type Handler struct {
-	deadline    time.Duration
 	handle      HandlerFunc
 	concurrency int
+	deadline    time.Duration
 }
 
 // HandlerOption is function that sets optional configuration for Handlers
