@@ -14,7 +14,6 @@ import (
 	"context"
 	"math"
 	"runtime"
-	"strings"
 	"time"
 
 	"math/rand"
@@ -56,8 +55,8 @@ type Neoq interface {
 	// Shutdown halts the worker
 	Shutdown(ctx context.Context) error
 
-	// WithConfigOpt configures neoq with with optional configuration
-	WithConfigOpt(opt ConfigOption) Neoq
+	// WithConfig configures neoq with with optional configuration
+	WithConfig(opt ConfigOption) Neoq
 }
 
 // Logger interface is the interface that neoq's logger must implement
@@ -91,18 +90,18 @@ func (h Handler) WithOption(opt HandlerOption) (handler Handler) {
 	return h
 }
 
-// HandlerDeadlineOpt configures handlers with a deadline for every job that it excutes
-// The deadline is the amount of time (ms) that can be spent executing the handler's HandlerFunction
-// when the deadline is exceeded, jobs are failed and begin the retry phase of their lifecycle
-func HandlerDeadlineOpt(d time.Duration) HandlerOption {
+// HandlerDeadline configures handlers with a time deadline for every executed job
+// The deadline is the amount of time that can be spent executing the handler's HandlerFunc
+// when a deadline is exceeded, the job is failed and enters its retry phase
+func HandlerDeadline(d time.Duration) HandlerOption {
 	return func(h *Handler) {
 		h.deadline = d
 	}
 }
 
-// HandlerConcurrencyOpt configures Neoq handlers to process jobs concurrently
+// HandlerConcurreny configures Neoq handlers to process jobs concurrently
 // the default concurrency is the number of (v)CPUs on the machine running Neoq
-func HandlerConcurrencyOpt(c int) HandlerOption {
+func HandlerConcurreny(c int) HandlerOption {
 	return func(h *Handler) {
 		h.concurrency = c
 	}
@@ -261,21 +260,6 @@ func randInt(max int) int {
 	return rand.Intn(max)
 }
 
-func stripNonAlphanum(s string) string {
-	var result strings.Builder
-	for i := 0; i < len(s); i++ {
-		b := s[i]
-		if (b == '_') ||
-			('a' <= b && b <= 'z') ||
-			('A' <= b && b <= 'Z') ||
-			('0' <= b && b <= '9') ||
-			b == ' ' {
-			result.WriteByte(b)
-		}
-	}
-	return result.String()
-}
-
 // internalConfig models internal neoq configuratio not exposed to users
 type internalConfig struct {
 	backendName      string // the name of a known backend
@@ -286,9 +270,11 @@ type internalConfig struct {
 func (i internalConfig) Enqueue(ctx context.Context, job Job) (jobID int64, err error) {
 	return
 }
+
 func (i internalConfig) Listen(ctx context.Context, queue string, h Handler) (err error) {
 	return
 }
+
 func (i internalConfig) ListenCron(ctx context.Context, cron string, h Handler) (err error) {
 	return
 }
@@ -297,6 +283,6 @@ func (i internalConfig) Shutdown(ctx context.Context) (err error) {
 	return
 }
 
-func (i internalConfig) WithConfigOpt(opt ConfigOption) (n Neoq) {
+func (i internalConfig) WithConfig(opt ConfigOption) (n Neoq) {
 	return
 }

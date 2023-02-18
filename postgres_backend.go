@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -376,7 +377,7 @@ func (w PgBackend) Shutdown(ctx context.Context) (err error) {
 	return
 }
 
-func (w PgBackend) WithConfigOpt(opt ConfigOption) Neoq {
+func (w PgBackend) WithConfig(opt ConfigOption) Neoq {
 	opt(&w)
 	return &w
 }
@@ -804,15 +805,15 @@ func (w PgBackend) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queu
 	return
 }
 
-// PgTransactionTimeoutOpt sets the time that NeoqPg's transactions may be idle before its underlying connection is
+// PgTransactionTimeout sets the time that NeoqPg's transactions may be idle before its underlying connection is
 // closed
 // The timeout is the number of milliseconds that a transaction may sit idle before postgres terminates the
 // transaction's underlying connection. The timeout should be longer than your longest job takes to complete. If set
 // too short, job state will become unpredictable, e.g. retry counts may become incorrect.
 //
-// PgTransactionTimeoutOpt is best set when calling neoq.New() rather than after creation using WithConfigOpt() because this
+// PgTransactionTimeout is best set when calling neoq.New() rather than after creation using WithConfig() because this
 // setting results in the creation of a new database connection pool.
-func PgTransactionTimeoutOpt(txTimeout int) ConfigOption {
+func PgTransactionTimeout(txTimeout int) ConfigOption {
 	return func(n Neoq) {
 		var ok bool
 		var npg PgBackend
@@ -856,4 +857,19 @@ func PgTransactionTimeoutOpt(txTimeout int) ConfigOption {
 			return
 		}
 	}
+}
+
+func stripNonAlphanum(s string) string {
+	var result strings.Builder
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if (b == '_') ||
+			('a' <= b && b <= 'z') ||
+			('A' <= b && b <= 'Z') ||
+			('0' <= b && b <= '9') ||
+			b == ' ' {
+			result.WriteByte(b)
+		}
+	}
+	return result.String()
 }

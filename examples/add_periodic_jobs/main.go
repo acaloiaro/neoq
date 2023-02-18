@@ -13,7 +13,7 @@ func main() {
 	// by default neoq connects to a local postgres server using: [neoq.DefaultPgConnectionString]
 	// connection strings can be set explicitly as follows:
 	// neoq.New(neoq.ConnectionString("postgres://username:passsword@hostname/database"))
-	nq, err := neoq.New(ctx, neoq.PgTransactionTimeoutOpt(1000))
+	nq, err := neoq.New(ctx, neoq.PgTransactionTimeout(1000))
 	if err != nil {
 		log.Fatalf("error initializing neoq: %v", err)
 	}
@@ -24,8 +24,8 @@ func main() {
 		return
 	})
 	handler = handler.
-		WithOption(neoq.HandlerDeadlineOpt(time.Duration(500 * time.Millisecond))).
-		WithOption(neoq.HandlerConcurrencyOpt(1))
+		WithOption(neoq.HandlerDeadline(500 * time.Millisecond)).
+		WithOption(neoq.HandlerConcurreny(1))
 
 	nq.ListenCron(ctx, "* * * * * *", handler)
 

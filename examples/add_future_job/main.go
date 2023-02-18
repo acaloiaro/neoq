@@ -11,7 +11,7 @@ import (
 func main() {
 	const queue = "foobar"
 	ctx := context.Background()
-	nq, err := neoq.New(ctx, neoq.PgTransactionTimeoutOpt(1000))
+	nq, err := neoq.New(ctx, neoq.PgTransactionTimeout(1000))
 	if err != nil {
 		log.Fatalf("error initializing neoq: %v", err)
 	}
