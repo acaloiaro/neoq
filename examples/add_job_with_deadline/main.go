@@ -11,11 +11,15 @@ import (
 func main() {
 	var err error
 	const queue = "foobar"
+	ctx := context.Background()
 
 	// by default neoq connects to a local postgres server using: [neoq.DefaultPgConnectionString]
 	// connection strings can be set explicitly as follows:
 	// neoq.New(neoq.ConnectionString("postgres://username:passsword@hostname/database"))
-	nq, _ := neoq.New()
+	nq, err := neoq.New(ctx)
+	if err != nil {
+		log.Fatalf("error initializing neoq: %v", err)
+	}
 
 	// we use a done channel here to make sure that our test doesn't exit before the job finishes running
 	// this is probably not a pattern you want to use in production jobs and you see it here only for testing reasons
@@ -33,12 +37,12 @@ func main() {
 	// this 10ms deadline will cause our job that sleeps for 1s to fail
 	handler = handler.WithOption(neoq.HandlerDeadlineOpt(10 * time.Millisecond))
 
-	err = nq.Listen(queue, handler)
+	err = nq.Listen(ctx, queue, handler)
 	if err != nil {
 		log.Println("error listening to queue", err)
 	}
 
-	_, err = nq.Enqueue(neoq.Job{
+	_, err = nq.Enqueue(ctx, neoq.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
 			"message": "hello, world",

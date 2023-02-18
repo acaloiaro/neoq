@@ -11,12 +11,13 @@ import (
 
 func TestWorkerListenConn(t *testing.T) {
 	const queue = "foobar"
-	pgBackend, err := NewPgBackend("postgres://postgres:postgres@127.0.0.1:5432/neoq")
+	ctx := context.TODO()
+	pgBackend, err := NewPgBackend(ctx, "postgres://postgres:postgres@127.0.0.1:5432/neoq")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	nq, err := New(Backend(pgBackend))
+	nq, err := New(ctx, Backend(pgBackend))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,13 +41,13 @@ func TestWorkerListenConn(t *testing.T) {
 	}
 
 	// Listen for jobs on the queue
-	nq.Listen(queue, handler)
+	nq.Listen(ctx, queue, handler)
 
 	// allow time for listener to start
 	time.Sleep(50 * time.Millisecond)
 
 	for i := 0; i < numJobs; i++ {
-		jid, err := nq.Enqueue(Job{
+		jid, err := nq.Enqueue(ctx, Job{
 			Queue: queue,
 			Payload: map[string]interface{}{
 				"message": fmt.Sprintf("hello world: %d", i),
@@ -89,7 +90,8 @@ func TestWorkerListenConn(t *testing.T) {
 
 func TestWorkerListenCron(t *testing.T) {
 	const cron = "* * * * * *"
-	nq, err := New()
+	ctx := context.TODO()
+	nq, err := New(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +112,7 @@ func TestWorkerListenCron(t *testing.T) {
 		t.Error(err)
 	}
 
-	nq.ListenCron(cron, handler)
+	nq.ListenCron(ctx, cron, handler)
 
 	// allow time for listener to start
 	time.Sleep(50 * time.Millisecond)

@@ -29,12 +29,13 @@ type contextKey int
 var varsKey contextKey
 
 const (
-	JobStatusNew              = "new"
-	JobStatusProcessed        = "processed"
-	JobStatusFailed           = "failed"
+	JobStatusNew       = "new"
+	JobStatusProcessed = "processed"
+	JobStatusFailed    = "failed"
+
 	DefaultPgConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
-	DefaultTransactionTimeout = 60000 //ms
-	DefaultHandlerDeadline    = 30000 //ms
+	DefaultTransactionTimeout = time.Minute
+	DefaultHandlerDeadline    = 30 * time.Second
 	DuplicateJobID            = -1
 	postgresBackendName       = "postgres"
 
@@ -65,18 +66,18 @@ const (
 // Neoq interface is Neoq's primary API
 type Neoq interface {
 	// Enqueue queues jobs to be executed asynchronously
-	Enqueue(job Job) (jobID int64, err error)
+	Enqueue(ctx context.Context, job Job) (jobID int64, err error)
 
 	// Listen listens for jobs on a queue and processes them with the given handler
-	Listen(queue string, h Handler) (err error)
+	Listen(ctx context.Context, queue string, h Handler) (err error)
 
 	// ListenCron listens for jobs on a cron schedule and processes them with the given handler
 	//
 	// See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
-	ListenCron(cron string, h Handler) (err error)
+	ListenCron(ctx context.Context, cron string, h Handler) (err error)
 
 	// Shutdown halts the worker
-	Shutdown() error
+	Shutdown(ctx context.Context) error
 
 	// WithConfigOpt configures neoq with with optional configuration
 	WithConfigOpt(opt ConfigOption) Neoq
@@ -99,9 +100,9 @@ type HandlerFunc func(ctx context.Context) error
 
 // Handler handles jobs on a queue
 type Handler struct {
-	deadline    time.Duration
 	handle      HandlerFunc
 	concurrency int
+	deadline    time.Duration
 }
 
 // HandlerOption is function that sets optional configuration for Handlers
@@ -143,7 +144,7 @@ func NewHandler(f HandlerFunc, opts ...HandlerOption) (h Handler) {
 
 	// always set a job deadline if none is set
 	if h.deadline == 0 {
-		h.deadline = time.Duration(DefaultHandlerDeadline * time.Millisecond)
+		h.deadline = DefaultHandlerDeadline
 	}
 
 	return
@@ -172,7 +173,7 @@ type Job struct {
 }
 
 // New creates a new Neoq instance for listening to queues and enqueing new jobs
-func New(opts ...ConfigOption) (n Neoq, err error) {
+func New(ctx context.Context, opts ...ConfigOption) (n Neoq, err error) {
 	ic := internalConfig{}
 	for _, opt := range opts {
 		opt(&ic)
@@ -189,13 +190,13 @@ func New(opts ...ConfigOption) (n Neoq, err error) {
 			err = errors.New("your must provide a postgres connection string to initialize the postgres backend: see neoq.ConnectionString(...)")
 			return
 		}
-		n, err = NewPgBackend(ic.connectionString, opts...)
+		n, err = NewPgBackend(ctx, ic.connectionString, opts...)
 	// TODO make the default an in-memory backend
 	default:
 		if ic.connectionString == "" {
 			ic.connectionString = DefaultPgConnectionString
 		}
-		n, err = NewPgBackend(ic.connectionString, opts...)
+		n, err = NewPgBackend(ctx, ic.connectionString, opts...)
 	}
 
 	return
@@ -305,17 +306,17 @@ type internalConfig struct {
 	connectionString string // a connection string to use connecting to a backend
 }
 
-func (i internalConfig) Enqueue(job Job) (jobID int64, err error) {
+func (i internalConfig) Enqueue(ctx context.Context, job Job) (jobID int64, err error) {
 	return
 }
-func (i internalConfig) Listen(queue string, h Handler) (err error) {
+func (i internalConfig) Listen(ctx context.Context, queue string, h Handler) (err error) {
 	return
 }
-func (i internalConfig) ListenCron(cron string, h Handler) (err error) {
+func (i internalConfig) ListenCron(ctx context.Context, cron string, h Handler) (err error) {
 	return
 }
 
-func (i internalConfig) Shutdown() (err error) {
+func (i internalConfig) Shutdown(ctx context.Context) (err error) {
 	return
 }
 
