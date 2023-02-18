@@ -21,6 +21,31 @@ import (
 	"golang.org/x/exp/slog"
 )
 
+const (
+	PendingJobIDQuery = `SELECT id
+					FROM neoq_jobs
+					WHERE queue = $1
+					AND status NOT IN ('processed')
+					AND run_after <= NOW()
+					FOR UPDATE SKIP LOCKED
+					LIMIT 1`
+	PendingJobQuery = `SELECT id,fingerprint,queue,status,payload,retries,max_retries,run_after,ran_at,created_at,error
+					FROM neoq_jobs
+					WHERE id = $1
+					AND status NOT IN ('processed')
+					AND run_after <= NOW()
+					FOR UPDATE SKIP LOCKED
+					LIMIT 1`
+	FutureJobQuery = `SELECT id,run_after
+					FROM neoq_jobs
+					WHERE queue = $1
+					AND status NOT IN ('processed')
+					AND run_after > NOW()
+					ORDER BY run_after ASC
+					LIMIT 100
+					FOR UPDATE SKIP LOCKED`
+)
+
 // PgBackend is a Postgres-based Neoq backend
 type PgBackend struct {
 	config     *pgConfig
