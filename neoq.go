@@ -29,9 +29,10 @@ type contextKey int
 var varsKey contextKey
 
 const (
-	JobStatusNew              = "new"
-	JobStatusProcessed        = "processed"
-	JobStatusFailed           = "failed"
+	JobStatusNew       = "new"
+	JobStatusProcessed = "processed"
+	JobStatusFailed    = "failed"
+
 	DefaultPgConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
 	DefaultTransactionTimeout = 60000 //ms
 	DefaultHandlerDeadline    = 30000 //ms
