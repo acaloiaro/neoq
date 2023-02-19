@@ -1,0 +1,39 @@
+name: test
+on: [push]
+
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    container: golang:1.20
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: test
+        run: make mod test coverage
+        env:
+          PGHOST: postgres
+          PGPORT: 5432
+      - name: upload results
+        uses: actions/upload-artifact@v3
+        with:
+          name: Upload test coverage
+          path: tmp/coverage
+      - name: function coverage
+        run: make func-coverage
