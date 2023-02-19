@@ -17,6 +17,11 @@ fmt:
 vet:
 	@go vet ./...
 
+.PHONY: update-dependencies
+update-dependencies:
+	@go get -u -v ./...
+	$(MAKE) mod
+
 .PHONY: lint
 lint:
 	@clear
