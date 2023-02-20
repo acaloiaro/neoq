@@ -5,14 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"testing"
 	"time"
+)
+
+var (
+	dbURL = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
 )
 
 func TestWorkerListenConn(t *testing.T) {
 	const queue = "foobar"
 	ctx := context.TODO()
-	pgBackend, err := NewPgBackend(ctx, "postgres://postgres:postgres@127.0.0.1:5432/neoq")
+
+	cnx := os.Getenv("DATABASE_URL")
+	if cnx == "" {
+		cnx = dbURL
+	}
+
+	pgBackend, err := NewPgBackend(ctx, cnx)
 	if err != nil {
 		t.Fatal(err)
 	}
