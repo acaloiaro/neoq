@@ -538,7 +538,7 @@ func (w PgBackend) start(ctx context.Context, queue string) (err error) {
 				}
 
 				if err != nil {
-					if err.Error() == "no rows in result set" {
+					if errors.Is(err, pgx.ErrNoRows) {
 						err = nil
 					} else {
 						w.logger.Error("error handling job", err, "job_id", jobID)
@@ -660,7 +660,7 @@ func (w PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan i
 		for {
 			jobID, err := w.getPendingJobID(ctx, conn, queue)
 			if err != nil {
-				if err.Error() != "no rows in result set" {
+				if !errors.Is(err, pgx.ErrNoRows) {
 					w.logger.Error("failed to fetch pending job", err, "job_id", jobID)
 				} else {
 					// done fetching pending jobs
