@@ -11,8 +11,7 @@ func main() {
 	var err error
 	const queue = "foobar"
 	ctx := context.Background()
-	//
-	nq, err := neoq.New(ctx, neoq.ConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable"))
+	nq, err := neoq.New(ctx)
 	if err != nil {
 		log.Fatalf("error initializing neoq: %v", err)
 	}
@@ -29,10 +28,10 @@ func main() {
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
 		done <- true
 		return
-	}, neoq.HandlerConcurreny(8))
+	}, neoq.HandlerConcurrency(8))
 
 	// Option 2: Set options after the handler is created
-	handler = handler.WithOption(neoq.HandlerConcurreny(8))
+	handler = handler.WithOption(neoq.HandlerConcurrency(8))
 
 	err = nq.Listen(ctx, queue, handler)
 	if err != nil {

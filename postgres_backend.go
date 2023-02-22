@@ -2,10 +2,7 @@ package neoq
 
 import (
 	"context"
-	"crypto/md5"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"strconv"
@@ -23,7 +20,9 @@ import (
 )
 
 const (
-	PendingJobIDQuery = `SELECT id
+	postgresBackendName       = "postgres"
+	DefaultPgConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
+	PendingJobIDQuery         = `SELECT id
 					FROM neoq_jobs
 					WHERE queue = $1
 					AND status NOT IN ('processed')
@@ -59,6 +58,7 @@ type PgBackend struct {
 	logger     Logger
 }
 
+// NewPgBackend creates a new neoq backend backed by Postgres
 // If the database does not yet exist, Neoq will attempt to create the database and related tables by default.
 //
 // Connection strings may be a URL or DSN-style connection string to neoq's database. The connection string supports multiple
@@ -388,18 +388,9 @@ func (w PgBackend) WithConfig(opt ConfigOption) Neoq {
 // Duplicate jobs are not added to the queue. Any two unprocessed jobs with the same fingerprint are duplicates
 func (w PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j Job) (jobID int64, err error) {
 
-	// fingerprint the job if it hasn't been fingerprinted already
-	// a fingerprint is the md5 sum of: queue + payload
-	if j.Fingerprint == "" {
-		var js []byte
-		js, err = json.Marshal(j.Payload)
-		if err != nil {
-			return
-		}
-		h := md5.New()
-		io.WriteString(h, j.Queue)
-		io.WriteString(h, string(js))
-		j.Fingerprint = fmt.Sprintf("%x", h.Sum(nil))
+	err = fingerprintJob(&j)
+	if err != nil {
+		return
 	}
 
 	var rowCount int64
@@ -710,7 +701,7 @@ func (w PgBackend) handleJob(ctx context.Context, jobID int64, handler Handler) 
 	}
 
 	// execute the queue handler of this job
-	handlerErr := w.execHandler(ctx, handler)
+	handlerErr := execHandler(ctx, handler)
 	err = w.updateJob(ctx, handlerErr)
 	if err != nil {
 		err = errors.Wrap(err, "error updating job status")
@@ -721,27 +712,6 @@ func (w PgBackend) handleJob(ctx context.Context, jobID int64, handler Handler) 
 	if err != nil {
 		w.logger.Error("unable to commit job transaction. retrying this job may dupliate work", err, "job_id", job.ID)
 		err = errors.Wrap(err, "unable to commit job transaction. retrying this job may dupliate work")
-	}
-
-	return
-}
-
-// exechandler executes handler functions with a concrete time deadline
-func (w PgBackend) execHandler(ctx context.Context, handler Handler) (err error) {
-	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(handler.deadline))
-	defer cancel()
-
-	var done = make(chan bool)
-	go func(ctx context.Context) {
-		err = handler.handle(ctx)
-		done <- true
-	}(ctx)
-
-	select {
-	case <-done:
-		return
-	case <-deadlineCtx.Done():
-		err = fmt.Errorf("job exceeded its %s deadline", handler.deadline)
 	}
 
 	return
