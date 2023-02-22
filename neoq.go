@@ -2,9 +2,7 @@
 //
 // Neoq's goal is to minimize the infrastructure necessary to add background job processing to Go applications. It does so by implementing queue durability with modular backends, rather than introducing a strict dependency on a particular backend such as Redis.
 //
-// A Postgres backend is provided out of a box. However, for Neoq to meet its goal of reducing the infrastructure
-// necessary to run background jobs -- additional backends are necessary. E.g. Applications that use MySQL, MonogoDB, or
-// Redis as their primary data stores will ideally use Neoq with corresponding backends.
+// An in-memory and Postgres backend are provided out of the box.
 package neoq
 
 // TODO dependencies to factor out
@@ -12,6 +10,7 @@ package neoq
 // "github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 import (
 	"context"
+	"fmt"
 	"math"
 	"runtime"
 	"time"
@@ -32,11 +31,10 @@ const (
 	JobStatusProcessed = "processed"
 	JobStatusFailed    = "failed"
 
-	DefaultPgConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
 	DefaultTransactionTimeout = time.Minute
 	DefaultHandlerDeadline    = 30 * time.Second
 	DuplicateJobID            = -1
-	postgresBackendName       = "postgres"
+	UnqueuedJobID             = -2
 )
 
 // Neoq interface is Neoq's primary API
@@ -53,10 +51,10 @@ type Neoq interface {
 	ListenCron(ctx context.Context, cron string, h Handler) (err error)
 
 	// Shutdown halts the worker
-	Shutdown(ctx context.Context) error
+	Shutdown(ctx context.Context) (err error)
 
 	// WithConfig configures neoq with with optional configuration
-	WithConfig(opt ConfigOption) Neoq
+	WithConfig(opt ConfigOption) (n Neoq)
 }
 
 // Logger interface is the interface that neoq's logger must implement
@@ -64,7 +62,7 @@ type Neoq interface {
 // This interface is a subset of [slog.Logger]. The slog interface was chosen under the assumption that its
 // likely to be Golang's standard library logging interface.
 //
-// TODO: Add WithLoggerOpt() for user-supplied logger configuration
+// TODO: Add WithLogger for user-supplied logger configuration
 type Logger interface {
 	Debug(msg string, args ...any)
 	Error(msg string, err error, args ...any)
@@ -76,9 +74,10 @@ type HandlerFunc func(ctx context.Context) error
 
 // Handler handles jobs on a queue
 type Handler struct {
-	handle      HandlerFunc
-	concurrency int
-	deadline    time.Duration
+	handle        HandlerFunc
+	concurrency   int
+	deadline      time.Duration
+	queueCapacity int64
 }
 
 // HandlerOption is function that sets optional configuration for Handlers
@@ -99,11 +98,19 @@ func HandlerDeadline(d time.Duration) HandlerOption {
 	}
 }
 
-// HandlerConcurreny configures Neoq handlers to process jobs concurrently
+// HandlerConcurrency configures Neoq handlers to process jobs concurrently
 // the default concurrency is the number of (v)CPUs on the machine running Neoq
-func HandlerConcurreny(c int) HandlerOption {
+func HandlerConcurrency(c int) HandlerOption {
 	return func(h *Handler) {
 		h.concurrency = c
+	}
+}
+
+// MaxQueueCapacity configures Handlers to enforce a maximum capacity on the queues that it handles
+// queues that have reached capacity cause Enqueue() to block until the queue is below capacity
+func MaxQueueCapacity(capacity int64) HandlerOption {
+	return func(h *Handler) {
+		h.queueCapacity = capacity
 	}
 }
 
@@ -134,6 +141,7 @@ type ConfigOption func(n Neoq)
 // Jobs are what are placed on queues for processing.
 //
 // The Fingerprint field can be supplied by the user to impact job deduplication.
+// TODO: Factor out `null` usage
 type Job struct {
 	ID          int64          `db:"id"`
 	Fingerprint string         `db:"fingerprint"` // A md5 sum of the job's queue + payload, affects job deduplication
@@ -167,12 +175,8 @@ func New(ctx context.Context, opts ...ConfigOption) (n Neoq, err error) {
 			return
 		}
 		n, err = NewPgBackend(ctx, ic.connectionString, opts...)
-	// TODO make the default an in-memory backend
 	default:
-		if ic.connectionString == "" {
-			ic.connectionString = DefaultPgConnectionString
-		}
-		n, err = NewPgBackend(ctx, ic.connectionString, opts...)
+		n, err = NewMemBackend(opts...)
 	}
 
 	return
@@ -213,7 +217,7 @@ func Backend(backend Neoq) ConfigOption {
 	}
 }
 
-// ConnectionString is a configuration option that sets a connection string for backend initialization:w
+// ConnectionString is a configuration option that sets a connection string for backend initialization
 func ConnectionString(connectionString string) ConfigOption {
 	return func(n Neoq) {
 		switch c := n.(type) {
@@ -256,8 +260,8 @@ func calculateBackoff(retryCount int) time.Time {
 }
 
 func randInt(max int) int {
-	rand.Seed(time.Now().UnixNano())
-	return rand.Intn(max)
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return r.Intn(max)
 }
 
 // internalConfig models internal neoq configuratio not exposed to users
@@ -284,5 +288,26 @@ func (i internalConfig) Shutdown(ctx context.Context) (err error) {
 }
 
 func (i internalConfig) WithConfig(opt ConfigOption) (n Neoq) {
+	return
+}
+
+// exechandler executes handler functions with a concrete time deadline
+func execHandler(ctx context.Context, handler Handler) (err error) {
+	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(handler.deadline))
+	defer cancel()
+
+	var done = make(chan bool)
+	go func(ctx context.Context) {
+		err = handler.handle(ctx)
+		done <- true
+	}(ctx)
+
+	select {
+	case <-done:
+		return
+	case <-deadlineCtx.Done():
+		err = fmt.Errorf("job exceeded its %s deadline", handler.deadline)
+	}
+
 	return
 }

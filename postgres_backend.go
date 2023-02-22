@@ -23,7 +23,9 @@ import (
 )
 
 const (
-	PendingJobIDQuery = `SELECT id
+	postgresBackendName       = "postgres"
+	DefaultPgConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
+	PendingJobIDQuery         = `SELECT id
 					FROM neoq_jobs
 					WHERE queue = $1
 					AND status NOT IN ('processed')
@@ -59,6 +61,7 @@ type PgBackend struct {
 	logger     Logger
 }
 
+// NewPgBackend creates a new neoq backend backed by Postgres
 // If the database does not yet exist, Neoq will attempt to create the database and related tables by default.
 //
 // Connection strings may be a URL or DSN-style connection string to neoq's database. The connection string supports multiple
@@ -710,7 +713,7 @@ func (w PgBackend) handleJob(ctx context.Context, jobID int64, handler Handler) 
 	}
 
 	// execute the queue handler of this job
-	handlerErr := w.execHandler(ctx, handler)
+	handlerErr := execHandler(ctx, handler)
 	err = w.updateJob(ctx, handlerErr)
 	if err != nil {
 		err = errors.Wrap(err, "error updating job status")
@@ -721,27 +724,6 @@ func (w PgBackend) handleJob(ctx context.Context, jobID int64, handler Handler) 
 	if err != nil {
 		w.logger.Error("unable to commit job transaction. retrying this job may dupliate work", err, "job_id", job.ID)
 		err = errors.Wrap(err, "unable to commit job transaction. retrying this job may dupliate work")
-	}
-
-	return
-}
-
-// exechandler executes handler functions with a concrete time deadline
-func (w PgBackend) execHandler(ctx context.Context, handler Handler) (err error) {
-	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(handler.deadline))
-	defer cancel()
-
-	var done = make(chan bool)
-	go func(ctx context.Context) {
-		err = handler.handle(ctx)
-		done <- true
-	}(ctx)
-
-	select {
-	case <-done:
-		return
-	case <-deadlineCtx.Done():
-		err = fmt.Errorf("job exceeded its %s deadline", handler.deadline)
 	}
 
 	return

@@ -5,37 +5,29 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"testing"
 	"time"
 )
 
-var (
-	dbURL = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
-)
-
 func TestWorkerListenConn(t *testing.T) {
 	const queue = "foobar"
-	ctx := context.TODO()
-
-	cnx := os.Getenv("DATABASE_URL")
-	if cnx == "" {
-		cnx = dbURL
-	}
-
-	pgBackend, err := NewPgBackend(ctx, cnx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	nq, err := New(ctx, Backend(pgBackend))
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	timeout := false
 	jobRan := false
 	numJobs := 1
+	doneCnt := 0
 	var done = make(chan bool, numJobs)
+
+	ctx := context.TODO()
+	backend, err := NewMemBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nq, err := New(ctx, Backend(backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	handler := NewHandler(func(ctx context.Context) (err error) {
 		var j *Job
 		j, err = JobFromContext(ctx)
@@ -45,7 +37,7 @@ func TestWorkerListenConn(t *testing.T) {
 	})
 	handler = handler.
 		WithOption(HandlerDeadline(500 * time.Millisecond)).
-		WithOption(HandlerConcurreny(1))
+		WithOption(HandlerConcurrency(1))
 
 	if err != nil {
 		t.Error(err)
@@ -69,8 +61,6 @@ func TestWorkerListenConn(t *testing.T) {
 		}
 	}
 
-	timeout := false
-	doneCnt := 0
 	for {
 		select {
 		case <-time.After(5 * time.Second):
@@ -117,7 +107,7 @@ func TestWorkerListenCron(t *testing.T) {
 
 	handler = handler.
 		WithOption(HandlerDeadline(500 * time.Millisecond)).
-		WithOption(HandlerConcurreny(1))
+		WithOption(HandlerConcurrency(1))
 
 	if err != nil {
 		t.Error(err)
