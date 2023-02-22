@@ -22,28 +22,30 @@ const (
 
 // MemBackend is a memory-backed neoq backend
 type MemBackend struct {
-	config     *memConfig
-	cron       *cron.Cron
-	logger     Logger
-	mu         *sync.Mutex        // mutext to protect mutating state on a pgWorker
-	handlers   map[string]Handler // a map of queue names to queue handlers
-	jobCount   int64              // number of jobs that have been queued
-	futureJobs map[int64]Job
-	queues     map[string](chan Job)
+	cancelFuncs []context.CancelFunc // A collection of cancel functions to be called upon Shutdown()
+	config      *memConfig
+	cron        *cron.Cron
+	logger      Logger
+	mu          *sync.Mutex        // mutext to protect mutating state on a pgWorker
+	handlers    map[string]Handler // a map of queue names to queue handlers
+	jobCount    int64              // number of jobs that have been queued
+	futureJobs  map[int64]Job
+	queues      map[string](chan Job)
 }
 
 type memConfig struct{}
 
 func NewMemBackend(opts ...ConfigOption) (n Neoq, err error) {
 	mb := &MemBackend{
-		config:     &memConfig{},
-		cron:       cron.New(),
-		mu:         &sync.Mutex{},
-		handlers:   make(map[string]Handler),
-		futureJobs: make(map[int64]Job),
-		queues:     make(map[string](chan Job)),
-		logger:     slog.New(slog.NewTextHandler(os.Stdout)),
-		jobCount:   0,
+		config:      &memConfig{},
+		cron:        cron.New(),
+		mu:          &sync.Mutex{},
+		handlers:    make(map[string]Handler),
+		futureJobs:  make(map[int64]Job),
+		queues:      make(map[string](chan Job)),
+		logger:      slog.New(slog.NewTextHandler(os.Stdout)),
+		jobCount:    0,
+		cancelFuncs: []context.CancelFunc{},
 	}
 	mb.cron.Start()
 
@@ -101,12 +103,15 @@ func (m *MemBackend) Listen(ctx context.Context, queue string, h Handler) (err e
 		queueCapacity = DefaultQueueCapacity
 	}
 
+	cctx, cancel := context.WithCancel(ctx)
+
 	m.mu.Lock()
+	m.cancelFuncs = append(m.cancelFuncs, cancel)
 	m.handlers[queue] = h
 	m.queues[queue] = make(chan Job, queueCapacity)
 	m.mu.Unlock()
 
-	err = m.start(ctx, queue)
+	err = m.start(cctx, queue)
 	if err != nil {
 		return
 	}
@@ -130,7 +135,12 @@ func (m MemBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) 
 
 	queue := stripNonAlphanum(strcase.ToSnake(*cdStr))
 
-	err = m.Listen(ctx, queue, h)
+	cctx, cancel := context.WithCancel(ctx)
+	m.mu.Lock()
+	m.cancelFuncs = append(m.cancelFuncs, cancel)
+	m.mu.Unlock()
+
+	err = m.Listen(cctx, queue, h)
 	if err != nil {
 		return
 	}
@@ -143,7 +153,13 @@ func (m MemBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) 
 }
 
 // Shutdown halts the worker
-func (m MemBackend) Shutdown(ctx context.Context) (err error) {
+func (m *MemBackend) Shutdown(ctx context.Context) (err error) {
+	for _, f := range m.cancelFuncs {
+		f()
+	}
+
+	m.cancelFuncs = nil
+
 	return
 }
 
