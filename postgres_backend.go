@@ -516,6 +516,7 @@ func (w PgBackend) start(ctx context.Context, queue string) (err error) {
 
 	for i := 0; i < handler.concurrency; i++ {
 		go func() {
+			var err error
 			var jobID int64
 
 			for {

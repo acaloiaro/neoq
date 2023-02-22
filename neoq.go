@@ -299,14 +299,17 @@ func execHandler(ctx context.Context, handler Handler) (err error) {
 	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(handler.deadline))
 	defer cancel()
 
+	var errCh = make(chan error, 1)
 	var done = make(chan bool)
-	go func(ctx context.Context) {
-		err = handler.handle(ctx)
+	go func(ctx context.Context) (e error) {
+		errCh <- handler.handle(ctx)
 		done <- true
+		return
 	}(ctx)
 
 	select {
 	case <-done:
+		err = <-errCh
 		return
 	case <-deadlineCtx.Done():
 		err = fmt.Errorf("job exceeded its %s deadline", handler.deadline)
