@@ -48,14 +48,15 @@ const (
 
 // PgBackend is a Postgres-based Neoq backend
 type PgBackend struct {
-	config     *pgConfig
-	cron       *cron.Cron
-	listenConn *pgx.Conn
-	pool       *pgxpool.Pool
-	handlers   map[string]Handler  // a map of queue names to queue handlers
-	mu         *sync.Mutex         // mutext to protect mutating state on a pgWorker
-	futureJobs map[int64]time.Time // map of future job IDs to their due time
-	logger     Logger
+	cancelFuncs []context.CancelFunc // A collection of cancel functions to be called upon Shutdown()
+	config      *pgConfig
+	cron        *cron.Cron
+	listenConn  *pgx.Conn
+	pool        *pgxpool.Pool
+	handlers    map[string]Handler  // a map of queue names to queue handlers
+	mu          *sync.Mutex         // mutex to protect mutating state on a pgWorker
+	futureJobs  map[int64]time.Time // map of future job IDs to their due time
+	logger      Logger
 }
 
 // NewPgBackend creates a new neoq backend backed by Postgres
@@ -82,20 +83,26 @@ type PgBackend struct {
 // - WithTransactionTimeout(timeout int): configure the idle_in_transaction_timeout for the worker's database
 // connection(s)
 func NewPgBackend(ctx context.Context, connectString string, opts ...ConfigOption) (n Neoq, err error) {
-	w := PgBackend{
-		mu:         &sync.Mutex{},
-		config:     &pgConfig{connectString: connectString},
-		handlers:   make(map[string]Handler),
-		futureJobs: make(map[int64]time.Time),
-		logger:     slog.New(slog.NewTextHandler(os.Stdout)),
-		cron:       cron.New(),
+	w := &PgBackend{
+		mu:          &sync.Mutex{},
+		config:      &pgConfig{connectString: connectString},
+		handlers:    make(map[string]Handler),
+		futureJobs:  make(map[int64]time.Time),
+		logger:      slog.New(slog.NewTextHandler(os.Stdout)),
+		cron:        cron.New(),
+		cancelFuncs: []context.CancelFunc{},
 	}
 	w.cron.Start()
 
 	// Set all options
 	for _, opt := range opts {
-		opt(&w)
+		opt(w)
 	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	w.mu.Lock()
+	w.cancelFuncs = append(w.cancelFuncs, cancel)
+	w.mu.Unlock()
 
 	err = w.initializeDB(ctx)
 	if err != nil {
@@ -274,7 +281,12 @@ func (w PgBackend) initializeDB(ctx context.Context) (err error) {
 }
 
 // Enqueue adds jobs to the specified queue
-func (w PgBackend) Enqueue(ctx context.Context, job Job) (jobID int64, err error) {
+func (w *PgBackend) Enqueue(ctx context.Context, job Job) (jobID int64, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	w.mu.Lock()
+	w.cancelFuncs = append(w.cancelFuncs, cancel)
+	w.mu.Unlock()
+
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
 		return
@@ -332,8 +344,11 @@ func (w PgBackend) Enqueue(ctx context.Context, job Job) (jobID int64, err error
 // Listen sets the queue handler function for the specified queue.
 //
 // Neoq will not process any queues until Listen() is called at least once.
-func (w PgBackend) Listen(ctx context.Context, queue string, h Handler) (err error) {
+func (w *PgBackend) Listen(ctx context.Context, queue string, h Handler) (err error) {
+	ctx, cancel := context.WithCancel(ctx)
+
 	w.mu.Lock()
+	w.cancelFuncs = append(w.cancelFuncs, cancel)
 	w.handlers[queue] = h
 	w.mu.Unlock()
 
@@ -347,7 +362,7 @@ func (w PgBackend) Listen(ctx context.Context, queue string, h Handler) (err err
 // ListenCron listens for jobs on a cron schedule and handles them with the provided handler
 //
 // See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
-func (w PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) (err error) {
+func (w *PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) (err error) {
 	cd, err := crondescriptor.NewCronDescriptor(cronSpec)
 	if err != nil {
 		return err
@@ -359,6 +374,12 @@ func (w PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) (
 	}
 
 	queue := stripNonAlphanum(strcase.ToSnake(*cdStr))
+	ctx, cancel := context.WithCancel(ctx)
+
+	w.mu.Lock()
+	w.cancelFuncs = append(w.cancelFuncs, cancel)
+	w.mu.Unlock()
+
 	w.cron.AddFunc(cronSpec, func() {
 		w.Enqueue(ctx, Job{Queue: queue})
 	})
@@ -368,11 +389,15 @@ func (w PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) (
 	return
 }
 
-func (w PgBackend) Shutdown(ctx context.Context) (err error) {
-	w.pool.Close()
+func (w *PgBackend) Shutdown(ctx context.Context) (err error) {
+	w.pool.Close() // also closes the hijacked listenConn
 	w.cron.Stop()
 
-	err = w.listenConn.Close(ctx)
+	for _, f := range w.cancelFuncs {
+		f()
+	}
+
+	w.cancelFuncs = nil
 
 	return
 }
@@ -737,6 +762,10 @@ func (w PgBackend) listen(ctx context.Context, queue string) (c chan int64) {
 		for {
 			notification, waitErr := w.listenConn.WaitForNotification(ctx)
 			if waitErr != nil {
+				if errors.Is(waitErr, context.Canceled) {
+					return
+				}
+
 				w.logger.Error("failed to wait for notification", waitErr)
 				time.Sleep(1 * time.Second)
 				continue
@@ -786,9 +815,9 @@ func (w PgBackend) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queu
 func PgTransactionTimeout(txTimeout int) ConfigOption {
 	return func(n Neoq) {
 		var ok bool
-		var npg PgBackend
+		var npg *PgBackend
 
-		if npg, ok = n.(PgBackend); !ok {
+		if npg, ok = n.(*PgBackend); !ok {
 			return
 		}
 

@@ -22,6 +22,7 @@ const (
 
 // MemBackend is a memory-backed neoq backend
 type MemBackend struct {
+	cancelFuncs  []context.CancelFunc // A collection of cancel functions to be called upon Shutdown()
 	cron         *cron.Cron
 	logger       Logger
 	mu           *sync.Mutex // mutext to protect mutating state on a pgWorker
@@ -42,6 +43,7 @@ func NewMemBackend(opts ...ConfigOption) (n Neoq, err error) {
 		fingerprints: sync.Map{},
 		logger:       slog.New(slog.NewTextHandler(os.Stdout)),
 		jobCount:     0,
+		cancelFuncs:  []context.CancelFunc{},
 	}
 	mb.cron.Start()
 
@@ -61,7 +63,7 @@ func (m *MemBackend) Enqueue(ctx context.Context, job Job) (jobID int64, err err
 	var ok bool
 
 	if qc, ok = m.queues.Load(job.Queue); !ok {
-		return UnqueuedJobID, fmt.Errorf("queue has no listeners: %w", job.Queue)
+		return UnqueuedJobID, fmt.Errorf("queue has no listeners: %s", job.Queue)
 	}
 
 	queueChan = qc.(chan Job)
@@ -117,6 +119,12 @@ func (m *MemBackend) Listen(ctx context.Context, queue string, h Handler) (err e
 	m.handlers.Store(queue, h)
 	m.queues.Store(queue, make(chan Job, queueCapacity))
 
+	ctx, cancel := context.WithCancel(ctx)
+
+	m.mu.Lock()
+	m.cancelFuncs = append(m.cancelFuncs, cancel)
+	m.mu.Unlock()
+
 	err = m.start(ctx, queue)
 	if err != nil {
 		return
@@ -141,6 +149,11 @@ func (m *MemBackend) ListenCron(ctx context.Context, cronSpec string, h Handler)
 
 	queue := stripNonAlphanum(strcase.ToSnake(*cdStr))
 
+	ctx, cancel := context.WithCancel(ctx)
+	m.mu.Lock()
+	m.cancelFuncs = append(m.cancelFuncs, cancel)
+	m.mu.Unlock()
+
 	err = m.Listen(ctx, queue, h)
 	if err != nil {
 		return
@@ -155,6 +168,12 @@ func (m *MemBackend) ListenCron(ctx context.Context, cronSpec string, h Handler)
 
 // Shutdown halts the worker
 func (m *MemBackend) Shutdown(ctx context.Context) (err error) {
+	for _, f := range m.cancelFuncs {
+		f()
+	}
+
+	m.cancelFuncs = nil
+
 	return
 }
 
