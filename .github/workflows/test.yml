@@ -28,7 +28,7 @@ jobs:
       - name: test
         run: make mod test coverage
         env:
-          DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
+          TEST_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
       - name: upload results
         uses: actions/upload-artifact@v3
         with:
