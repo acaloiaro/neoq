@@ -17,7 +17,7 @@ func main() {
 		neoq.ConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"))
 
 	if err != nil {
-		log.Fatalf("error initializing neoq: %w", err)
+		log.Fatalf("error initializing neoq: %v", err)
 	}
 
 	// Add a job that will execute 1 hour from now
