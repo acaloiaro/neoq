@@ -70,7 +70,7 @@ type Neoq interface {
 // This interface is a subset of [slog.Logger]. The slog interface was chosen under the assumption that its
 // likely to be Golang's standard library logging interface.
 //
-// TODO: Add WithLogger for user-supplied logger configuration
+// TODO Add WithLogger for user-supplied logger configuration
 // currently loggers are initialized by default as slog, but users
 // should be able to supply their own loggers.
 type Logger interface {
