@@ -1,6 +1,6 @@
 # Neoq
 
-Background job processing built on Postgres for Go
+Background job processing for Go
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/acaloiaro/neoq.svg)](https://pkg.go.dev/github.com/acaloiaro/neoq) [![Gitter chat](https://badges.gitter.im/gitterHQ/gitter.png)](https://app.gitter.im/#/room/#neoq:gitter.im)
 
@@ -10,15 +10,15 @@ Background job processing built on Postgres for Go
 
 # About
 
-Neoq is a background job framework for Go applications. Its purpose is to minimize the infrastructure necessary to run production applications. It does so by implementing queue durability with modular backends, rather than introducing a strict dependency on a particular backend such as Redis.
+Neoq is a background job framework for Go applications. Its purpose is to minimize the infrastructure necessary to run production applications. It does so by implementing queue durability with modular backends.
 
-The initial backend is based on Postgres since many applications already require a ralational database, and Postgres is an excellent one.
+This allows application to use the same type of data store for both application data and backround job processing. At the moment an in-memory and Postgres backends are provided. However, the goal is to have backends for every major datastore: Postgres, Redis, MySQL, etc.
 
 Neoq does not aim to be the _fastest_ background job processor. It aims to be _fast_, _reliable_, and demand a minimal infrastructure footprint.
 
-# Features
+# What it does
 
-- **Postgres-backed** job processing
+- **Background job Processing**: Neoq has an in-memory and Postgres backend out of the box. Users may supply their own without changing neoq directly.
 - **Retries**: Jobs may be retried a configurable number of times with exponential backoff and jitter to prevent thundering herds
 - **Job uniqueness**: jobs are fingerprinted based on their payload and status to prevent job duplication (multiple unprocessed jobs with the same payload cannot be queued)
 - **Deadlines**: Queue handlers can be configured with per-job time deadlines with millisecond accuracy
@@ -37,15 +37,15 @@ Error handling in this section is excluded for simplicity.
 
 ## Add queue handlers
 
-Queue handlers listen for Jobs on queues. Jobs may consist of any payload that is JSON-serializable. Payloads are stored in Postgres in a `jsonb` field.
+Queue handlers listen for Jobs on queues. Jobs may consist of any payload that is JSON-serializable.
 
 Queue Handlers are simple Go functions that accept a `Context` parameter.
 
 **Example**: Add a listener on the `hello_world` queue
 
 ```go
-nq, err := neoq.New(ctx, neoq.ConnectionString("postgres://postgres:postgres@localhost:5432/neoq"))
-handleErr(err)
+ctx := context.Background()
+nq, _ := neoq.New(ctx)
 nq.Listen(ctx, "hello_world", neoq.NewHandler(func(ctx context.Context) (err error) {
   j, err := neoq.JobFromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
@@ -58,16 +58,14 @@ nq.Listen(ctx, "hello_world", neoq.NewHandler(func(ctx context.Context) (err err
 **Example**: Add a "Hello World" job to the `hello_world` queue
 
 ```go
-nq, err := neoq.New(ctx, neoq.ConnectionString("postgres://postgres:postgres@localhost:5432/neoq"))
-handleErr(err)
-
-jid, err := nq.Enqueue(ctx, neoq.Job{
+ctx := context.Background()
+nq, _ := neoq.New(ctx)
+jid, _ := nq.Enqueue(ctx, neoq.Job{
   Queue: "hello_world",
   Payload: map[string]interface{}{
     "message": "hello world",
   },
 })
-handleErr(err)
 ```
 
 # Example Code

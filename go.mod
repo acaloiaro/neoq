@@ -7,7 +7,7 @@ require (
 	github.com/iancoleman/strcase v0.2.0
 	github.com/jackc/pgx/v5 v5.3.0
 	github.com/jsuar/go-cron-descriptor v0.1.0
-	github.com/pkg/errors v0.9.1
+	github.com/pkg/errors v0.8.1
 	github.com/robfig/cron v1.2.0
 	golang.org/x/exp v0.0.0-20230213192124-5e25df0256eb
 )

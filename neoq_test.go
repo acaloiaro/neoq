@@ -4,48 +4,36 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
-	"os"
 	"testing"
 	"time"
 )
 
-var (
-	dbURL = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
-)
-
 func TestWorkerListenConn(t *testing.T) {
-	const queue = "foobar"
-	ctx := context.TODO()
-
-	cnx := os.Getenv("DATABASE_URL")
-	if cnx == "" {
-		cnx = dbURL
-	}
-
-	pgBackend, err := NewPgBackend(ctx, cnx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	nq, err := New(ctx, Backend(pgBackend))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	jobRan := false
+	const queue = "testing"
+	timeout := false
+	complete := false
 	numJobs := 1
+	doneCnt := 0
 	var done = make(chan bool, numJobs)
+
+	ctx := context.TODO()
+	backend, err := NewMemBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nq, err := New(ctx, Backend(backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	handler := NewHandler(func(ctx context.Context) (err error) {
-		var j *Job
-		j, err = JobFromContext(ctx)
-		log.Println("queue:", j.Queue, "got job", "id:", j.ID, "messsage:", j.Payload["message"])
 		done <- true
 		return
 	})
 	handler = handler.
 		WithOption(HandlerDeadline(500 * time.Millisecond)).
-		WithOption(HandlerConcurreny(1))
+		WithOption(HandlerConcurrency(1))
 
 	if err != nil {
 		t.Error(err)
@@ -55,7 +43,7 @@ func TestWorkerListenConn(t *testing.T) {
 	nq.Listen(ctx, queue, handler)
 
 	// allow time for listener to start
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	for i := 0; i < numJobs; i++ {
 		jid, err := nq.Enqueue(ctx, Job{
@@ -69,8 +57,6 @@ func TestWorkerListenConn(t *testing.T) {
 		}
 	}
 
-	timeout := false
-	doneCnt := 0
 	for {
 		select {
 		case <-time.After(5 * time.Second):
@@ -81,7 +67,7 @@ func TestWorkerListenConn(t *testing.T) {
 		}
 
 		if doneCnt >= numJobs {
-			jobRan = true
+			complete = true
 			break
 		}
 
@@ -90,10 +76,7 @@ func TestWorkerListenConn(t *testing.T) {
 		}
 	}
 
-	// Allow time for job status to be updated in the database
-	time.Sleep(50 * time.Millisecond)
-
-	if !jobRan {
+	if !complete {
 		t.Error(err)
 	}
 
@@ -107,17 +90,16 @@ func TestWorkerListenCron(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jobRan := false
+	complete := false
 	var done = make(chan bool)
 	handler := NewHandler(func(ctx context.Context) (err error) {
-		log.Println("got periodic job")
 		done <- true
 		return
 	})
 
 	handler = handler.
 		WithOption(HandlerDeadline(500 * time.Millisecond)).
-		WithOption(HandlerConcurreny(1))
+		WithOption(HandlerConcurrency(1))
 
 	if err != nil {
 		t.Error(err)
@@ -126,19 +108,16 @@ func TestWorkerListenCron(t *testing.T) {
 	nq.ListenCron(ctx, cron, handler)
 
 	// allow time for listener to start
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	select {
 	case <-time.After(5 * time.Second):
 		err = errors.New("timed out waiting for periodic job")
 	case <-done:
-		jobRan = true
+		complete = true
 	}
 
-	// Allow time for job status to be updated in the database
-	time.Sleep(50 * time.Millisecond)
-
-	if !jobRan {
+	if !complete {
 		t.Error(err)
 	}
 }

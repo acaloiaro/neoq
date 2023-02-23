@@ -11,9 +11,13 @@ import (
 func main() {
 	const queue = "foobar"
 	ctx := context.Background()
-	nq, err := neoq.New(ctx, neoq.PgTransactionTimeout(1000))
+	nq, err := neoq.New(ctx,
+		neoq.PgTransactionTimeout(1000),
+		neoq.BackendName("postgres"),
+		neoq.ConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"))
+
 	if err != nil {
-		log.Fatalf("error initializing neoq: %v", err)
+		log.Fatalf("error initializing neoq: %w", err)
 	}
 
 	// Add a job that will execute 1 hour from now
