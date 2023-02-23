@@ -30,14 +30,19 @@ type contextKey int
 var varsKey contextKey
 
 const (
-	JobStatusNew       = "new"
-	JobStatusProcessed = "processed"
-	JobStatusFailed    = "failed"
-
+	JobStatusNew              = "new"
+	JobStatusProcessed        = "processed"
+	JobStatusFailed           = "failed"
 	DefaultTransactionTimeout = time.Minute
 	DefaultHandlerDeadline    = 30 * time.Second
 	DuplicateJobID            = -1
 	UnqueuedJobID             = -2
+	DefaultJobCheckInterval   = 5 * time.Second
+	// the window of time between time.Now() and when a job's RunAfter comes due that neoq will schedule a goroutine to
+	// schdule the job for execution.
+	// E.g. right now is 16:00 and a job's RunAfter is 16:30 of the same date. This job will get a dedicated goroutine to
+	// wait until the job's RunAfter, scheduling the job to be run exactly at RunAfter
+	DefaultFutureJobWindow = 30 * time.Second
 )
 
 // Neoq interface is Neoq's primary API
@@ -210,6 +215,21 @@ func BackendName(backendName string) ConfigOption {
 	}
 }
 
+// JobCheckInterval configures the duration of time between checking for future jobs
+func JobCheckInterval(interval time.Duration) ConfigOption {
+	return func(n Neoq) {
+		switch b := n.(type) {
+		case *internalConfig:
+			b.jobCheckInterval = interval
+		case *MemBackend:
+			b.jobCheckInterval = interval
+		case *PgBackend:
+			b.jobCheckInterval = interval
+		default:
+		}
+	}
+}
+
 // Backend is a configuration option that instructs neoq to use the specified backend rather than initializing a new one
 // during initialization
 func Backend(backend Neoq) ConfigOption {
@@ -271,9 +291,10 @@ func randInt(max int) int {
 
 // internalConfig models internal neoq configuratio not exposed to users
 type internalConfig struct {
-	backendName      string // the name of a known backend
-	backend          *Neoq  // user-provided backend to use
-	connectionString string // a connection string to use connecting to a backend
+	backendName      string        // the name of a known backend
+	backend          *Neoq         // user-provided backend to use
+	connectionString string        // a connection string to use connecting to a backend
+	jobCheckInterval time.Duration // the duration of time between checking for future jobs to schedule
 }
 
 func (i internalConfig) Enqueue(ctx context.Context, job Job) (jobID int64, err error) {

@@ -48,15 +48,16 @@ const (
 
 // PgBackend is a Postgres-based Neoq backend
 type PgBackend struct {
-	cancelFuncs []context.CancelFunc // A collection of cancel functions to be called upon Shutdown()
-	config      *pgConfig
-	cron        *cron.Cron
-	listenConn  *pgx.Conn
-	pool        *pgxpool.Pool
-	handlers    map[string]Handler  // a map of queue names to queue handlers
-	mu          *sync.Mutex         // mutex to protect mutating state on a pgWorker
-	futureJobs  map[int64]time.Time // map of future job IDs to their due time
-	logger      Logger
+	cancelFuncs      []context.CancelFunc // A collection of cancel functions to be called upon Shutdown()
+	config           *pgConfig
+	cron             *cron.Cron
+	listenConn       *pgx.Conn
+	pool             *pgxpool.Pool
+	handlers         map[string]Handler  // a map of queue names to queue handlers
+	mu               *sync.Mutex         // mutex to protect mutating state on a pgWorker
+	futureJobs       map[int64]time.Time // map of future job IDs to their due time
+	jobCheckInterval time.Duration       // the duration of time between checking for future jobs to schedule
+	logger           Logger
 }
 
 // NewPgBackend creates a new neoq backend backed by Postgres
@@ -84,13 +85,14 @@ type PgBackend struct {
 // connection(s)
 func NewPgBackend(ctx context.Context, connectString string, opts ...ConfigOption) (n Neoq, err error) {
 	w := &PgBackend{
-		mu:          &sync.Mutex{},
-		config:      &pgConfig{connectString: connectString},
-		handlers:    make(map[string]Handler),
-		futureJobs:  make(map[int64]time.Time),
-		logger:      slog.New(slog.NewTextHandler(os.Stdout)),
-		cron:        cron.New(),
-		cancelFuncs: []context.CancelFunc{},
+		mu:               &sync.Mutex{},
+		config:           &pgConfig{connectString: connectString},
+		handlers:         make(map[string]Handler),
+		futureJobs:       make(map[int64]time.Time),
+		logger:           slog.New(slog.NewTextHandler(os.Stdout)),
+		cron:             cron.New(),
+		cancelFuncs:      []context.CancelFunc{},
+		jobCheckInterval: DefaultJobCheckInterval,
 	}
 	w.cron.Start()
 
@@ -602,18 +604,16 @@ func (w PgBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 	w.initFutureJobs(ctx, queue)
 
 	// check for new future jobs on an interval
-	// TODO Make the future jobs check interval configurable in PgBackend
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(w.jobCheckInterval)
 
 	for {
 		// loop over list of future jobs, scheduling goroutines to wait for jobs that are due within the next 30 seconds
-		// TODO Make interval of time for which jobs are dedicated a goroutine configurable in PgBackend
 		for jobID, runAfter := range w.futureJobs {
-			at := time.Until(runAfter)
-			if at <= time.Duration(30*time.Second) {
+			timeUntillRunAfter := time.Until(runAfter)
+			if timeUntillRunAfter <= DefaultFutureJobWindow {
 				w.removeFutureJob(jobID)
 				go func(jid int64) {
-					scheduleCh := time.After(at)
+					scheduleCh := time.After(timeUntillRunAfter)
 					<-scheduleCh
 					w.announceJob(ctx, queue, jid)
 				}(jobID)
