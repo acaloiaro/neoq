@@ -10,4 +10,4 @@ jobs:
               with:
                   AUTO_ASSIGN: true
                   AUTO_P: true
-                  CLOSE_ISSUE: true
+                  CLOSE_ISSUES: true
