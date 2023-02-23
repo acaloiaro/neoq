@@ -231,12 +231,12 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 
 func (m *MemBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 	// check for new future jobs on an interval
-	// TODO make this time configurable
+	// TODO make the future jobs check interval configurable in MemBackend
 	ticker := time.NewTicker(5 * time.Second)
 
 	for {
 		// loop over list of future jobs, scheduling goroutines to wait for jobs that are due within the next 30 seconds
-		// TODO: Make 30 seconds configurable
+		// TODO Make interval of time for which jobs are dedicated a goroutine configurable in MemBackend
 		m.futureJobs.Range(func(k, v any) bool {
 			job := v.(Job)
 			var queueChan chan Job

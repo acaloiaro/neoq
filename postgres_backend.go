@@ -461,8 +461,9 @@ func (w PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *Job, jobEr
 // if the retry count exceeds the maximum number of retries for the job, move the job to the dead jobs queue
 //
 // if `tx`'s underlying connection dies, it results in this function throwing an error and job status inaccurately
-// reflecting the status of the job and its number of retries. TODO: consider solutions to this problem, e.g. acquiring
-// a new connection in the event of connection failure
+// reflecting the status of the job and its number of retries.
+// TODO: Handle dropped connections when updating job status in PgBackend
+// e.g. acquiring a new connection in the event of connection failure
 func (w PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 	status := JobStatusProcessed
 	errMsg := ""
@@ -522,8 +523,8 @@ func (w PgBackend) start(ctx context.Context, queue string) (err error) {
 	}
 
 	// use a single connection to listen for jobs on all queues
-	// TODO: Give more thought to the implications of hijacking a conn from the pool here
-	// should this connect not come from the pool, to avoid tainting it with connections that don't have an idle in
+	// TODO: Give more thought to the implications of hijacking connections to LISTEN on in PgBackend
+	// should this connecton not come from the pool, to avoid tainting it with connections that don't have an idle in
 	// transaction time out set?
 	w.mu.Lock()
 	if w.listenConn == nil {
@@ -535,8 +536,7 @@ func (w PgBackend) start(ctx context.Context, queue string) (err error) {
 	pendingJobsChan := w.pendingJobs(ctx, queue) // process overdue jobs *at startup*
 
 	// process all future jobs and retries
-	// TODO there are no illusions about the current future jobs system being robust
-	// the current implementation is a brute force proof of concept that can certainly be improved upon
+	// TODO consider performance implications of `scheduleFutureJobs` in PgBackend
 	go func() { w.scheduleFutureJobs(ctx, queue) }()
 
 	for i := 0; i < handler.concurrency; i++ {
@@ -602,12 +602,12 @@ func (w PgBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 	w.initFutureJobs(ctx, queue)
 
 	// check for new future jobs on an interval
-	// TODO make this time configurable
+	// TODO Make the future jobs check interval configurable in PgBackend
 	ticker := time.NewTicker(5 * time.Second)
 
 	for {
 		// loop over list of future jobs, scheduling goroutines to wait for jobs that are due within the next 30 seconds
-		// TODO: Make 30 seconds configurable
+		// TODO Make interval of time for which jobs are dedicated a goroutine configurable in PgBackend
 		for jobID, runAfter := range w.futureJobs {
 			at := time.Until(runAfter)
 			if at <= time.Duration(30*time.Second) {
@@ -664,7 +664,6 @@ func (w PgBackend) announceJob(ctx context.Context, queue string, jobID int64) {
 func (w PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan int64) {
 	jobsCh = make(chan int64)
 
-	// TODO Consider refactoring to use pgxpool.AcquireFunc()
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
 		w.logger.Error("failed to acquire database connection to listen for pending queue items", err)
@@ -744,8 +743,9 @@ func (w PgBackend) handleJob(ctx context.Context, jobID int64, handler Handler) 
 }
 
 // listen uses Postgres LISTEN to listen for jobs on a queue
-// TODO: There is currently no handling for listener disconnects. This will lead to jobs not getting processed until the
-// worker is restarted. Implement disconnect handling.
+// TODO: There is currently no handling of listener disconnects in PgBackend.
+// This will lead to jobs not getting processed until the worker is restarted.
+// Implement disconnect handling.
 func (w PgBackend) listen(ctx context.Context, queue string) (c chan int64) {
 	var err error
 	c = make(chan int64)

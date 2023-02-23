@@ -5,7 +5,7 @@
 // An in-memory and Postgres backend are provided out of the box.
 package neoq
 
-// TODO dependencies to factor out
+// TODO factor out the following dependencies
 // "github.com/iancoleman/strcase"
 // "github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 import (
@@ -66,6 +66,8 @@ type Neoq interface {
 // likely to be Golang's standard library logging interface.
 //
 // TODO: Add WithLogger for user-supplied logger configuration
+// currently loggers are initialized by default as slog, but users
+// should be able to supply their own loggers.
 type Logger interface {
 	Debug(msg string, args ...any)
 	Error(msg string, err error, args ...any)
@@ -144,7 +146,7 @@ type ConfigOption func(n Neoq)
 // Jobs are what are placed on queues for processing.
 //
 // The Fingerprint field can be supplied by the user to impact job deduplication.
-// TODO: Factor out `null` usage
+// TODO Factor out usage of the null package: github.com/guregu/null
 type Job struct {
 	ID          int64          `db:"id"`
 	Fingerprint string         `db:"fingerprint"` // A md5 sum of the job's queue + payload, affects job deduplication
