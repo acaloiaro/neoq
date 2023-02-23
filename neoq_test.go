@@ -31,9 +31,10 @@ func TestWorkerListenConn(t *testing.T) {
 		done <- true
 		return
 	})
-	handler = handler.
-		WithOption(HandlerDeadline(500 * time.Millisecond)).
-		WithOption(HandlerConcurrency(1))
+	handler.WithOptions(
+		HandlerDeadline(500*time.Millisecond),
+		HandlerConcurrency(1),
+	)
 
 	if err != nil {
 		t.Error(err)
@@ -97,9 +98,10 @@ func TestWorkerListenCron(t *testing.T) {
 		return
 	})
 
-	handler = handler.
-		WithOption(HandlerDeadline(500 * time.Millisecond)).
-		WithOption(HandlerConcurrency(1))
+	handler.WithOptions(
+		HandlerDeadline(500*time.Millisecond),
+		HandlerConcurrency(1),
+	)
 
 	if err != nil {
 		t.Error(err)

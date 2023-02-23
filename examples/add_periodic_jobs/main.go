@@ -20,9 +20,10 @@ func main() {
 		log.Println("running periodic job")
 		return
 	})
-	handler = handler.
-		WithOption(neoq.HandlerDeadline(500 * time.Millisecond)).
-		WithOption(neoq.HandlerConcurrency(1))
+	handler.WithOptions(
+		neoq.HandlerDeadline(500*time.Millisecond),
+		neoq.HandlerConcurrency(1),
+	)
 
 	nq.ListenCron(ctx, "* * * * * *", handler)
 

@@ -93,10 +93,11 @@ type Handler struct {
 // HandlerOption is function that sets optional configuration for Handlers
 type HandlerOption func(w *Handler)
 
-// WithOption returns the handler with the given options set
-func (h Handler) WithOption(opt HandlerOption) (handler Handler) {
-	opt(&h)
-	return h
+// WithOptions sets one or more options on handler
+func (h Handler) WithOptions(opts ...HandlerOption) {
+	for _, opt := range opts {
+		opt(&h)
+	}
 }
 
 // HandlerDeadline configures handlers with a time deadline for every executed job
@@ -127,17 +128,19 @@ func MaxQueueCapacity(capacity int64) HandlerOption {
 // NewHandler creates a new queue handler
 func NewHandler(f HandlerFunc, opts ...HandlerOption) (h Handler) {
 	h = Handler{
-		handle:      f,
-		concurrency: runtime.NumCPU() - 1,
+		handle: f,
 	}
 
-	for _, opt := range opts {
-		opt(&h)
+	h.WithOptions(opts...)
+
+	// default to running one fewer threads than CPUs
+	if h.concurrency == 0 {
+		HandlerConcurrency(runtime.NumCPU() - 1)(&h)
 	}
 
 	// always set a job deadline if none is set
 	if h.deadline == 0 {
-		h.deadline = DefaultHandlerDeadline
+		HandlerDeadline(DefaultHandlerDeadline)(&h)
 	}
 
 	return
