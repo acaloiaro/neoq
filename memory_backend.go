@@ -16,34 +16,37 @@ import (
 )
 
 const (
-	DefaultQueueCapacity = 10000 // the default capacity of individual queues
-	EmptyCapacity        = 0
+	// TODO make MemBackend queue capacity configurable
+	defaultMemQueueCapacity = 10000 // the default capacity of individual queues
+	emptyCapacity           = 0
 )
 
 // MemBackend is a memory-backed neoq backend
 type MemBackend struct {
-	cancelFuncs  []context.CancelFunc // A collection of cancel functions to be called upon Shutdown()
-	cron         *cron.Cron
-	logger       Logger
-	mu           *sync.Mutex // mutext to protect mutating state on a pgWorker
-	jobCount     int64       // number of jobs that have been queued since start
-	handlers     sync.Map    // map queue names [string] to queue handlers [Handler]
-	fingerprints sync.Map    // map fingerprints [string] to their jobs [Job]
-	futureJobs   sync.Map    // map jobIDs [int64] to [Jobs]
-	queues       sync.Map    // map queue names [string] to queue handler channels [chan Job]
+	cancelFuncs      []context.CancelFunc // A collection of cancel functions to be called upon Shutdown()
+	cron             *cron.Cron
+	logger           Logger
+	jobCheckInterval time.Duration // the duration of time between checking for future jobs to schedule
+	mu               *sync.Mutex   // mutext to protect mutating state on a pgWorker
+	jobCount         int64         // number of jobs that have been queued since start
+	handlers         sync.Map      // map queue names [string] to queue handlers [Handler]
+	fingerprints     sync.Map      // map fingerprints [string] to their jobs [Job]
+	futureJobs       sync.Map      // map jobIDs [int64] to [Jobs]
+	queues           sync.Map      // map queue names [string] to queue handler channels [chan Job]
 }
 
 func NewMemBackend(opts ...ConfigOption) (n Neoq, err error) {
 	mb := &MemBackend{
-		cron:         cron.New(),
-		mu:           &sync.Mutex{},
-		queues:       sync.Map{},
-		handlers:     sync.Map{},
-		futureJobs:   sync.Map{},
-		fingerprints: sync.Map{},
-		logger:       slog.New(slog.NewTextHandler(os.Stdout)),
-		jobCount:     0,
-		cancelFuncs:  []context.CancelFunc{},
+		cron:             cron.New(),
+		mu:               &sync.Mutex{},
+		queues:           sync.Map{},
+		handlers:         sync.Map{},
+		futureJobs:       sync.Map{},
+		fingerprints:     sync.Map{},
+		logger:           slog.New(slog.NewTextHandler(os.Stdout)),
+		jobCount:         0,
+		cancelFuncs:      []context.CancelFunc{},
+		jobCheckInterval: DefaultJobCheckInterval,
 	}
 	mb.cron.Start()
 
@@ -112,8 +115,8 @@ func (m *MemBackend) Enqueue(ctx context.Context, job Job) (jobID int64, err err
 // Listen listens for jobs on a queue and processes them with the given handler
 func (m *MemBackend) Listen(ctx context.Context, queue string, h Handler) (err error) {
 	var queueCapacity = h.queueCapacity
-	if queueCapacity == EmptyCapacity {
-		queueCapacity = DefaultQueueCapacity
+	if queueCapacity == emptyCapacity {
+		queueCapacity = defaultMemQueueCapacity
 	}
 
 	m.handlers.Store(queue, h)
@@ -232,20 +235,19 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 func (m *MemBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 	// check for new future jobs on an interval
 	// TODO make the future jobs check interval configurable in MemBackend
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(m.jobCheckInterval)
 
 	for {
 		// loop over list of future jobs, scheduling goroutines to wait for jobs that are due within the next 30 seconds
-		// TODO Make interval of time for which jobs are dedicated a goroutine configurable in MemBackend
 		m.futureJobs.Range(func(k, v any) bool {
 			job := v.(Job)
 			var queueChan chan Job
 
-			at := time.Until(job.RunAfter)
-			if at <= time.Duration(30*time.Second) {
+			timeUntilRunAfter := time.Until(job.RunAfter)
+			if timeUntilRunAfter <= DefaultFutureJobWindow {
 				m.removeFutureJob(job.ID)
 				go func(j Job) {
-					scheduleCh := time.After(at)
+					scheduleCh := time.After(timeUntilRunAfter)
 					<-scheduleCh
 					if qc, ok := m.queues.Load(queue); ok {
 						queueChan = qc.(chan Job)
