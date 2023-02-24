@@ -391,7 +391,12 @@ func (w *PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) 
 	return
 }
 
-func (w *PgBackend) Shutdown(ctx context.Context) (err error) {
+// SetLogger sets this backend's logger
+func (w *PgBackend) SetLogger(logger Logger) {
+	w.logger = logger
+}
+
+func (w *PgBackend) Shutdown(ctx context.Context) {
 	w.pool.Close() // also closes the hijacked listenConn
 	w.cron.Stop()
 
@@ -400,13 +405,6 @@ func (w *PgBackend) Shutdown(ctx context.Context) (err error) {
 	}
 
 	w.cancelFuncs = nil
-
-	return
-}
-
-func (w PgBackend) WithConfig(opt ConfigOption) Neoq {
-	opt(&w)
-	return &w
 }
 
 // enqueueJob adds jobs to the queue, returning the job ID
@@ -559,9 +557,10 @@ func (w PgBackend) start(ctx context.Context, queue string) (err error) {
 				if err != nil {
 					if errors.Is(err, pgx.ErrNoRows) {
 						err = nil
-					} else {
-						w.logger.Error("error handling job", err, "job_id", jobID)
+						continue
 					}
+
+					w.logger.Error("job failed", err, "job_id", jobID)
 
 					continue
 				}
@@ -726,11 +725,15 @@ func (w PgBackend) handleJob(ctx context.Context, jobID int64, handler Handler) 
 	}
 
 	// execute the queue handler of this job
-	handlerErr := execHandler(ctx, handler)
-	err = w.updateJob(ctx, handlerErr)
+	jobErr := execHandler(ctx, handler)
+	err = w.updateJob(ctx, jobErr)
 	if err != nil {
 		err = fmt.Errorf("error updating job status: %w", err)
 		return
+	}
+
+	if jobErr != nil {
+		return jobErr
 	}
 
 	err = tx.Commit(ctx)

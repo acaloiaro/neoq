@@ -12,8 +12,8 @@ func main() {
 	const queue = "foobar"
 	ctx := context.Background()
 	nq, err := neoq.New(ctx,
-		neoq.BackendName("postgres"),
-		neoq.ConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"))
+		neoq.WithBackendName("postgres"),
+		neoq.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"))
 	if err != nil {
 		log.Fatalf("error initializing neoq: %v", err)
 	}

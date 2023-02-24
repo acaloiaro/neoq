@@ -58,21 +58,17 @@ type Neoq interface {
 	// See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
 	ListenCron(ctx context.Context, cron string, h Handler) (err error)
 
-	// Shutdown halts the worker
-	Shutdown(ctx context.Context) (err error)
+	// SetLogger sets the logger for a backend
+	SetLogger(logger Logger)
 
-	// WithConfig configures neoq with with optional configuration
-	WithConfig(opt ConfigOption) (n Neoq)
+	// Shutdown halts job processing and releases resources
+	Shutdown(ctx context.Context)
 }
 
 // Logger interface is the interface that neoq's logger must implement
 //
 // This interface is a subset of [slog.Logger]. The slog interface was chosen under the assumption that its
 // likely to be Golang's standard library logging interface.
-//
-// TODO Add WithLogger for user-supplied logger configuration
-// currently loggers are initialized by default as slog, but users
-// should be able to supply their own loggers.
 type Logger interface {
 	Debug(msg string, args ...any)
 	Error(msg string, err error, args ...any)
@@ -206,9 +202,9 @@ func JobFromContext(ctx context.Context) (j *Job, err error) {
 	return
 }
 
-// BackendName is a configuration option that instructs neoq to create a new backend with the given name upon
+// WithBackendName configures neoq to create a new backend with the given name upon
 // initialization
-func BackendName(backendName string) ConfigOption {
+func WithBackendName(backendName string) ConfigOption {
 	return func(n Neoq) {
 		switch c := n.(type) {
 		case *internalConfig:
@@ -218,8 +214,8 @@ func BackendName(backendName string) ConfigOption {
 	}
 }
 
-// JobCheckInterval configures the duration of time between checking for future jobs
-func JobCheckInterval(interval time.Duration) ConfigOption {
+// WithJobCheckInterval configures the duration of time between checking for future jobs
+func WithJobCheckInterval(interval time.Duration) ConfigOption {
 	return func(n Neoq) {
 		switch b := n.(type) {
 		case *internalConfig:
@@ -233,9 +229,9 @@ func JobCheckInterval(interval time.Duration) ConfigOption {
 	}
 }
 
-// Backend is a configuration option that instructs neoq to use the specified backend rather than initializing a new one
+// WithBackend configures neoq to use the specified backend rather than initializing a new one
 // during initialization
-func Backend(backend Neoq) ConfigOption {
+func WithBackend(backend Neoq) ConfigOption {
 	return func(n Neoq) {
 		switch c := n.(type) {
 		case *internalConfig:
@@ -245,14 +241,27 @@ func Backend(backend Neoq) ConfigOption {
 	}
 }
 
-// ConnectionString is a configuration option that sets a connection string for backend initialization
-func ConnectionString(connectionString string) ConfigOption {
+// WithConnectionString configures neoq to use connection string for backend initialization
+func WithConnectionString(connectionString string) ConfigOption {
 	return func(n Neoq) {
 		switch c := n.(type) {
 		case *internalConfig:
 			c.connectionString = connectionString
 		case *PgBackend:
 			c.config.connectString = connectionString
+		default:
+		}
+	}
+}
+
+// WithLogger configures neoq to use the spcified logger
+func WithLogger(logger Logger) ConfigOption {
+	return func(n Neoq) {
+		switch b := n.(type) {
+		case *MemBackend:
+			b.logger = logger
+		case *PgBackend:
+			b.logger = logger
 		default:
 		}
 	}
@@ -312,13 +321,11 @@ func (i internalConfig) ListenCron(ctx context.Context, cron string, h Handler) 
 	return
 }
 
-func (i internalConfig) Shutdown(ctx context.Context) (err error) {
+func (i internalConfig) SetLogger(logger Logger) {
 	return
 }
 
-func (i internalConfig) WithConfig(opt ConfigOption) (n Neoq) {
-	return
-}
+func (i internalConfig) Shutdown(ctx context.Context) {}
 
 // exechandler executes handler functions with a concrete time deadline
 func execHandler(ctx context.Context, handler Handler) (err error) {
@@ -336,9 +343,19 @@ func execHandler(ctx context.Context, handler Handler) (err error) {
 	select {
 	case <-done:
 		err = <-errCh
-		return
+		if err != nil {
+			err = fmt.Errorf("job failed to process: %w", err)
+		}
+
 	case <-deadlineCtx.Done():
-		err = fmt.Errorf("job exceeded its %s deadline", handler.deadline)
+		ctxErr := deadlineCtx.Err()
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			err = fmt.Errorf("job exceeded its %s deadline: %w", handler.deadline, ctxErr)
+		} else if errors.Is(ctxErr, context.Canceled) {
+			err = nil
+		} else {
+			err = fmt.Errorf("job failed to process: %w", ctxErr)
+		}
 	}
 
 	return

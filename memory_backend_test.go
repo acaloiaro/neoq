@@ -25,7 +25,7 @@ func TestMemeoryBackendBasicJobProcessing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nq, err := New(ctx, Backend(backend))
+	nq, err := New(ctx, WithBackend(backend))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestMemeoryBackendConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nq, err := New(ctx, Backend(backend))
+	nq, err := New(ctx, WithBackend(backend))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestMemeoryBackendFutureJobScheduling(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nq, err := New(ctx, Backend(backend))
+	nq, err := New(ctx, WithBackend(backend))
 	if err != nil {
 		t.Fatal(err)
 	}
