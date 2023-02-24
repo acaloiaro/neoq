@@ -169,19 +169,19 @@ func (m *MemBackend) ListenCron(ctx context.Context, cronSpec string, h Handler)
 	return
 }
 
+// SetLogger sets this backend's logger
+func (m *MemBackend) SetLogger(logger Logger) {
+	m.logger = logger
+}
+
 // Shutdown halts the worker
-func (m *MemBackend) Shutdown(ctx context.Context) (err error) {
+func (m *MemBackend) Shutdown(ctx context.Context) {
 	for _, f := range m.cancelFuncs {
 		f()
 	}
 
 	m.cancelFuncs = nil
 
-	return
-}
-
-// WithConfig configures neoq with with optional configuration
-func (m *MemBackend) WithConfig(opt ConfigOption) (n Neoq) {
 	return
 }
 
@@ -219,7 +219,7 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 				}
 
 				if err != nil {
-					m.logger.Error("error handling job", err, "job_id", job.ID)
+					m.logger.Error("job failed", err, "job_id", job.ID)
 					runAfter := calculateBackoff(job.Retries)
 					job.RunAfter = runAfter
 					m.queueFutureJob(job)
@@ -279,9 +279,9 @@ func (m *MemBackend) handleJob(ctx context.Context, job Job, handler Handler) (e
 	}
 
 	// execute the queue handler of this job
-	handlerErr := execHandler(hctx, handler)
-	if handlerErr != nil {
-		job.Error = null.StringFrom(handlerErr.Error())
+	err = execHandler(hctx, handler)
+	if err != nil {
+		job.Error = null.StringFrom(err.Error())
 	}
 
 	return
