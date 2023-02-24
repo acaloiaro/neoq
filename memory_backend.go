@@ -170,7 +170,7 @@ func (m *MemBackend) ListenCron(ctx context.Context, cronSpec string, h Handler)
 }
 
 // Shutdown halts the worker
-func (m *MemBackend) Shutdown(ctx context.Context) (err error) {
+func (m *MemBackend) Shutdown(ctx context.Context) {
 	for _, f := range m.cancelFuncs {
 		f()
 	}

@@ -391,7 +391,7 @@ func (w *PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) 
 	return
 }
 
-func (w *PgBackend) Shutdown(ctx context.Context) (err error) {
+func (w *PgBackend) Shutdown(ctx context.Context) {
 	w.pool.Close() // also closes the hijacked listenConn
 	w.cron.Stop()
 

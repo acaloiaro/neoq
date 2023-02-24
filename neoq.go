@@ -58,8 +58,8 @@ type Neoq interface {
 	// See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
 	ListenCron(ctx context.Context, cron string, h Handler) (err error)
 
-	// Shutdown halts the worker
-	Shutdown(ctx context.Context) (err error)
+	// Shutdown halts job processing and releases resources
+	Shutdown(ctx context.Context)
 
 	// WithConfig configures neoq with with optional configuration
 	WithConfig(opt ConfigOption) (n Neoq)
@@ -312,7 +312,7 @@ func (i internalConfig) ListenCron(ctx context.Context, cron string, h Handler) 
 	return
 }
 
-func (i internalConfig) Shutdown(ctx context.Context) (err error) {
+func (i internalConfig) Shutdown(ctx context.Context) {
 	return
 }
 
