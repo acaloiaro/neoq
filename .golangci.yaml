@@ -134,7 +134,7 @@ linters:
     - gocritic
     - gocyclo
     - godox
-    #- goerr113 # I like this, but seems a bit too excessive
+    - goerr113
     - gofmt
     - goheader
     - goimports
