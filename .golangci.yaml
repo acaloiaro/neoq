@@ -149,7 +149,7 @@ linters:
     - importas
     - ineffassign
     - interfacebloat
-    - ireturn
+    #- ireturn
     - lll
     - loggercheck
     - maintidx
@@ -172,7 +172,7 @@ linters:
     - stylecheck
     - tenv
     - testableexamples
-    - testpackage
+    #- testpackage
     - thelper
     - unconvert
     - unparam
