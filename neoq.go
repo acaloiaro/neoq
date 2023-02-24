@@ -94,9 +94,9 @@ type Handler struct {
 type HandlerOption func(w *Handler)
 
 // WithOptions sets one or more options on handler
-func (h Handler) WithOptions(opts ...HandlerOption) {
+func (h *Handler) WithOptions(opts ...HandlerOption) {
 	for _, opt := range opts {
-		opt(&h)
+		opt(h)
 	}
 }
 

@@ -111,11 +111,7 @@ func TestMemeoryBackendConfiguration(t *testing.T) {
 	handler := NewHandler(func(ctx context.Context) (err error) {
 		time.Sleep(100 * time.Millisecond)
 		return
-	})
-
-	handler = handler.
-		WithOption(HandlerConcurrency(1)).
-		WithOption(MaxQueueCapacity(1))
+	}, HandlerConcurrency(1), MaxQueueCapacity(1))
 
 	nq.Listen(ctx, queue, handler)
 
