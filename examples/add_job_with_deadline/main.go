@@ -35,7 +35,7 @@ func main() {
 	})
 
 	// this 10ms deadline will cause our job that sleeps for 1s to fail
-	handler = handler.WithOption(neoq.HandlerDeadline(10 * time.Millisecond))
+	handler.WithOptions(neoq.HandlerDeadline(10 * time.Millisecond))
 
 	err = nq.Listen(ctx, queue, handler)
 	if err != nil {

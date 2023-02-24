@@ -31,7 +31,7 @@ func main() {
 	}, neoq.HandlerConcurrency(8))
 
 	// Option 2: Set options after the handler is created
-	handler = handler.WithOption(neoq.HandlerConcurrency(8))
+	handler.WithOptions(neoq.HandlerConcurrency(8))
 
 	err = nq.Listen(ctx, queue, handler)
 	if err != nil {
