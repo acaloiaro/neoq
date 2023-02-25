@@ -1,4 +1,4 @@
-package memory
+package memory_test
 
 import (
 	"context"
@@ -6,47 +6,57 @@ import (
 	"testing"
 	"time"
 
+	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends/memory"
+	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/internal"
+	"github.com/acaloiaro/neoq/jobs"
 	"github.com/pkg/errors"
 	"golang.org/x/exp/slog"
+)
+
+const (
+	queue = "testing"
 )
 
 // TestMemeoryBackendBasicJobProcessing tests that the memory backend is able to process the most basic jobs with the
 // most basic configuration.
 func TestMemeoryBackendBasicJobProcessing(t *testing.T) {
-	queue := "testing"
 	numJobs := 1000
 	doneCnt := 0
 	done := make(chan bool)
 	var timeoutTimer = time.After(5 * time.Second)
 
 	ctx := context.TODO()
-	backend, err := NewMemBackend()
+	backend, err := memory.NewMemBackend()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	nq, err := New(ctx, WithBackend(backend))
+	nq, err := neoq.New(ctx, neoq.WithBackend(backend))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	nq.Listen(ctx, queue, handler)
+	if err := nq.Listen(ctx, queue, h); err != nil {
+		t.Fatal(err)
+	}
 
 	go func() {
 		for i := 0; i < numJobs; i++ {
-			jid, err := nq.Enqueue(ctx, Job{
+			jid, e := nq.Enqueue(ctx, &jobs.Job{
 				Queue: queue,
 				Payload: map[string]interface{}{
 					"message": fmt.Sprintf("hello world: %d", i),
 				},
 			})
-			if err != nil || jid == DuplicateJobID {
-				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", err)
+			if e != nil || jid == internal.DuplicateJobID {
+				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", e)
 			}
 		}
 	}()
@@ -92,39 +102,40 @@ func TestMemeoryBackendBasicJobProcessing(t *testing.T) {
 // that the max queue capacity configuration has taken effect.
 func TestMemeoryBackendConfiguration(t *testing.T) {
 	numJobs := 3
-	queue := "testing"
 	timeout := false
 
 	done := make(chan bool)
 
 	ctx := context.TODO()
-	backend, err := NewMemBackend()
+	backend, err := memory.NewMemBackend()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	nq, err := New(ctx, WithBackend(backend))
+	nq, err := neoq.New(ctx, neoq.WithBackend(backend))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(_ context.Context) (err error) {
 		time.Sleep(100 * time.Millisecond)
 		return
-	}, HandlerConcurrency(1), MaxQueueCapacity(1))
+	}, handler.Concurrency(1), handler.MaxQueueCapacity(1))
 
-	nq.Listen(ctx, queue, handler)
+	if err := nq.Listen(ctx, queue, h); err != nil {
+		t.Fatal(err)
+	}
 
 	go func() {
 		for i := 0; i < numJobs; i++ {
-			jid, err := nq.Enqueue(ctx, Job{
+			jid, e := nq.Enqueue(ctx, &jobs.Job{
 				Queue: queue,
 				Payload: map[string]interface{}{
 					"message": fmt.Sprintf("hello world: %d", i),
 				},
 			})
-			if err != nil || jid == DuplicateJobID {
-				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", err)
+			if e != nil || jid == internal.DuplicateJobID {
+				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", e)
 			}
 		}
 
@@ -146,40 +157,40 @@ func TestMemeoryBackendConfiguration(t *testing.T) {
 }
 
 func TestMemeoryBackendFutureJobScheduling(t *testing.T) {
-	queue := "testing"
-
 	ctx := context.TODO()
-	backend, err := NewMemBackend()
+	backend, err := memory.NewMemBackend()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	nq, err := New(ctx, WithBackend(backend))
+	nq, err := neoq.New(ctx, neoq.WithBackend(backend))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(ctx context.Context) (err error) {
 		return
 	})
 
-	nq.Listen(ctx, queue, handler)
+	if err := nq.Listen(ctx, queue, h); err != nil {
+		t.Fatal(err)
+	}
 
-	jid, err := nq.Enqueue(ctx, Job{
+	jid, err := nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
 			"message": "hello world",
 		},
 		RunAfter: time.Now().Add(5 * time.Second),
 	})
-	if err != nil || jid == DuplicateJobID {
+	if err != nil || jid == internal.DuplicateJobID {
 		slog.Error("job was not enqueued. either it was duplicate or this error caused it:", err)
 	}
 
-	mb := nq.(*MemBackend)
+	mb := nq.(*memory.MemBackend)
 
 	var ok bool
-	if _, ok = mb.futureJobs.Load(jid); !ok {
+	if _, ok = mb.TEMPFutureJobs().Load(jid); !ok {
 		t.Error(err)
 	}
 

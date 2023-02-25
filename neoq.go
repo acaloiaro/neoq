@@ -1,8 +1,5 @@
 package neoq
 
-// TODO factor out the following dependencies
-// "github.com/iancoleman/strcase"
-// "github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 import (
 	"context"
 	"errors"
@@ -17,7 +14,7 @@ import (
 // Neoq interface is Neoq's primary API
 type Neoq interface {
 	// Enqueue queues jobs to be executed asynchronously
-	Enqueue(ctx context.Context, job jobs.Job) (jobID int64, err error)
+	Enqueue(ctx context.Context, job *jobs.Job) (jobID int64, err error)
 
 	// Listen listens for jobs on a queue and processes them with the given handler
 	Listen(ctx context.Context, queue string, h handler.Handler) (err error)
@@ -41,7 +38,7 @@ type Neoq interface {
 type ConfigOption func(n Neoq)
 
 // New creates a new Neoq instance for listening to queues and enqueing new jobs
-func New(ctx context.Context, opts ...ConfigOption) (n Neoq, err error) {
+func New(_ context.Context, opts ...ConfigOption) (n Neoq, err error) {
 	ic := internalConfig{}
 	for _, opt := range opts {
 		opt(&ic)
@@ -59,8 +56,9 @@ func New(ctx context.Context, opts ...ConfigOption) (n Neoq, err error) {
 			return
 		}
 		// TODO implement pg backend initialization from New()
-		//n, err = postgres.NewPgBackend(ctx, ic.connectionString, opts...)
+		// n, err = postgres.NewPgBackend(ctx, ic.connectionString, opts...)
 	default:
+		// TODO neoq should not know about backend providers
 		n, err = memory.NewMemBackend()
 	}
 
@@ -94,14 +92,14 @@ func WithBackend(backend Neoq) ConfigOption {
 	}
 }
 
-// internalConfig models internal neoq configuratio not exposed to users
+// internalConfig models internal neoq configuration not exposed to users
 type internalConfig struct {
 	backendName      string // the name of a known backend
 	backend          *Neoq  // user-provided backend to use
 	connectionString string // a connection string to use connecting to a backend
 }
 
-func (i internalConfig) Enqueue(ctx context.Context, job jobs.Job) (jobID int64, err error) {
+func (i internalConfig) Enqueue(ctx context.Context, job *jobs.Job) (jobID int64, err error) {
 	return
 }
 

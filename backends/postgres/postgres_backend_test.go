@@ -1,4 +1,4 @@
-package postgres
+package postgres_test
 
 import (
 	"context"
@@ -7,6 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/acaloiaro/neoq/backends/postgres"
+	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/internal"
+	"github.com/acaloiaro/neoq/jobs"
 	"github.com/pkg/errors"
 	"golang.org/x/exp/slog"
 )
@@ -27,28 +31,28 @@ func TestPgBackendBasicJobProcessing(t *testing.T) {
 	}
 
 	ctx := context.TODO()
-	nq, err := NewPgBackend(ctx, connString)
+	nq, err := postgres.NewPgBackend(ctx, connString)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	nq.Listen(ctx, queue, handler)
+	nq.Listen(ctx, queue, h)
 
 	go func() {
 		for i := 0; i < numJobs; i++ {
-			jid, err := nq.Enqueue(ctx, Job{
+			jid, e := nq.Enqueue(ctx, &jobs.Job{
 				Queue: queue,
 				Payload: map[string]interface{}{
 					"message": fmt.Sprintf("hello world: %d", i),
 				},
 			})
-			if err != nil || jid == DuplicateJobID {
-				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", err)
+			if e != nil || jid == internal.DuplicateJobID {
+				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", e)
 			}
 		}
 	}()

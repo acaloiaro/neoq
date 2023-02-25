@@ -49,13 +49,13 @@ func TestWorkerListenConn(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})
 	h.WithOptions(
-		handler.HandlerDeadline(500*time.Millisecond),
-		handler.HandlerConcurrency(1),
+		handler.Deadline(500*time.Millisecond),
+		handler.Concurrency(1),
 	)
 
 	if err != nil {
@@ -69,7 +69,7 @@ func TestWorkerListenConn(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 
 	for i := 0; i < numJobs; i++ {
-		jid, err := nq.Enqueue(ctx, jobs.Job{
+		jid, err := nq.Enqueue(ctx, &jobs.Job{
 			Queue: queue,
 			Payload: map[string]interface{}{
 				"message": fmt.Sprintf("hello world: %d", i),
@@ -113,14 +113,14 @@ func TestWorkerListenCron(t *testing.T) {
 	defer nq.Shutdown(ctx)
 
 	var done = make(chan bool)
-	h := handler.NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})
 
 	h.WithOptions(
-		handler.HandlerDeadline(500*time.Millisecond),
-		handler.HandlerConcurrency(1),
+		handler.Deadline(500*time.Millisecond),
+		handler.Concurrency(1),
 	)
 
 	if err != nil {
@@ -157,7 +157,7 @@ func TestNeoqAddLogger(t *testing.T) {
 
 	nq.SetLogger(testLogger{l: log.New(buf, "", 0), done: done})
 
-	h := handler.NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(ctx context.Context) (err error) {
 		err = errTrigger
 		return
 	})
@@ -171,7 +171,7 @@ func TestNeoqAddLogger(t *testing.T) {
 		t.Error(err)
 	}
 
-	_, err = nq.Enqueue(ctx, jobs.Job{Queue: queue})
+	_, err = nq.Enqueue(ctx, &jobs.Job{Queue: queue})
 	if err != nil {
 		t.Error(err)
 	}
