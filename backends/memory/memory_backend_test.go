@@ -1,4 +1,4 @@
-package neoq
+package memory
 
 import (
 	"context"

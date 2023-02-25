@@ -8,6 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/acaloiaro/neoq/backends/memory"
+	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/jobs"
 )
 
 var errTrigger = errors.New("triggerering a log error")
@@ -39,24 +43,19 @@ func TestWorkerListenConn(t *testing.T) {
 	var done = make(chan bool, numJobs)
 
 	ctx := context.TODO()
-	backend, err := NewMemBackend()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	nq, err := New(ctx, WithBackend(backend))
+	nq, err := memory.NewMemBackend()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer nq.Shutdown(ctx)
 
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	h := handler.NewHandler(func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})
-	handler.WithOptions(
-		HandlerDeadline(500*time.Millisecond),
-		HandlerConcurrency(1),
+	h.WithOptions(
+		handler.HandlerDeadline(500*time.Millisecond),
+		handler.HandlerConcurrency(1),
 	)
 
 	if err != nil {
@@ -64,13 +63,13 @@ func TestWorkerListenConn(t *testing.T) {
 	}
 
 	// Listen for jobs on the queue
-	nq.Listen(ctx, queue, handler)
+	nq.Listen(ctx, queue, h)
 
 	// allow time for listener to start
 	time.Sleep(5 * time.Millisecond)
 
 	for i := 0; i < numJobs; i++ {
-		jid, err := nq.Enqueue(ctx, Job{
+		jid, err := nq.Enqueue(ctx, jobs.Job{
 			Queue: queue,
 			Payload: map[string]interface{}{
 				"message": fmt.Sprintf("hello world: %d", i),
@@ -107,28 +106,28 @@ func TestWorkerListenConn(t *testing.T) {
 func TestWorkerListenCron(t *testing.T) {
 	const cron = "* * * * * *"
 	ctx := context.TODO()
-	nq, err := New(ctx)
+	nq, err := memory.NewMemBackend()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer nq.Shutdown(ctx)
 
 	var done = make(chan bool)
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	h := handler.NewHandler(func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	handler.WithOptions(
-		HandlerDeadline(500*time.Millisecond),
-		HandlerConcurrency(1),
+	h.WithOptions(
+		handler.HandlerDeadline(500*time.Millisecond),
+		handler.HandlerConcurrency(1),
 	)
 
 	if err != nil {
 		t.Error(err)
 	}
 
-	nq.ListenCron(ctx, cron, handler)
+	nq.ListenCron(ctx, cron, h)
 
 	// allow time for listener to start
 	time.Sleep(5 * time.Millisecond)
@@ -147,17 +146,18 @@ func TestWorkerListenCron(t *testing.T) {
 func TestNeoqAddLogger(t *testing.T) {
 	const queue = "testing"
 	var done = make(chan bool)
-
+	buf := &strings.Builder{}
 	ctx := context.TODO()
 
-	buf := &strings.Builder{}
-	nq, err := New(ctx, WithLogger(testLogger{l: log.New(buf, "", 0), done: done}))
+	nq, err := New(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer nq.Shutdown(ctx)
 
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	nq.SetLogger(testLogger{l: log.New(buf, "", 0), done: done})
+
+	h := handler.NewHandler(func(ctx context.Context) (err error) {
 		err = errTrigger
 		return
 	})
@@ -166,12 +166,12 @@ func TestNeoqAddLogger(t *testing.T) {
 	}
 
 	// Listen for jobs on the queue
-	err = nq.Listen(ctx, queue, handler)
+	err = nq.Listen(ctx, queue, h)
 	if err != nil {
 		t.Error(err)
 	}
 
-	_, err = nq.Enqueue(ctx, Job{Queue: queue})
+	_, err = nq.Enqueue(ctx, jobs.Job{Queue: queue})
 	if err != nil {
 		t.Error(err)
 	}

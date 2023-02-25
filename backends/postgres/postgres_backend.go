@@ -1,4 +1,4 @@
-package neoq
+package postgres
 
 import (
 	"context"
@@ -7,10 +7,14 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
+	nctx "github.com/acaloiaro/neoq/context"
+	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/internal"
+	"github.com/acaloiaro/neoq/jobs"
+	"github.com/acaloiaro/neoq/logging"
 	"github.com/iancoleman/strcase"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -46,6 +50,9 @@ const (
 					FOR UPDATE SKIP LOCKED`
 )
 
+// PgConfigOption is a function that sets optional PgBackend configuration
+type PgConfigOption func(p *PgBackend)
+
 // PgBackend is a Postgres-based Neoq backend
 type PgBackend struct {
 	cancelFuncs      []context.CancelFunc // A collection of cancel functions to be called upon Shutdown()
@@ -53,14 +60,15 @@ type PgBackend struct {
 	cron             *cron.Cron
 	listenConn       *pgx.Conn
 	pool             *pgxpool.Pool
-	handlers         map[string]Handler  // a map of queue names to queue handlers
-	mu               *sync.Mutex         // mutex to protect mutating state on a pgWorker
-	futureJobs       map[int64]time.Time // map of future job IDs to their due time
-	jobCheckInterval time.Duration       // the duration of time between checking for future jobs to schedule
-	logger           Logger
+	handlers         map[string]handler.Handler // a map of queue names to queue handlers
+	mu               *sync.Mutex                // mutex to protect mutating state on a pgWorker
+	futureJobs       map[int64]time.Time        // map of future job IDs to their due time
+	jobCheckInterval time.Duration              // the duration of time between checking for future jobs to schedule
+	logger           logging.Logger
 }
 
 // NewPgBackend creates a new neoq backend backed by Postgres
+//
 // If the database does not yet exist, Neoq will attempt to create the database and related tables by default.
 //
 // Connection strings may be a URL or DSN-style connection string to neoq's database. The connection string supports multiple
@@ -83,16 +91,16 @@ type PgBackend struct {
 // Available ConfigOption
 // - WithTransactionTimeout(timeout int): configure the idle_in_transaction_timeout for the worker's database
 // connection(s)
-func NewPgBackend(ctx context.Context, connectString string, opts ...ConfigOption) (n Neoq, err error) {
+func NewPgBackend(ctx context.Context, connectString string, opts ...PgConfigOption) (n *PgBackend, err error) {
 	w := &PgBackend{
 		mu:               &sync.Mutex{},
 		config:           &pgConfig{connectString: connectString},
-		handlers:         make(map[string]Handler),
+		handlers:         make(map[string]handler.Handler),
 		futureJobs:       make(map[int64]time.Time),
 		logger:           slog.New(slog.NewTextHandler(os.Stdout)),
 		cron:             cron.New(),
 		cancelFuncs:      []context.CancelFunc{},
-		jobCheckInterval: DefaultJobCheckInterval,
+		jobCheckInterval: internal.DefaultJobCheckInterval,
 	}
 	w.cron.Start()
 
@@ -140,6 +148,13 @@ func NewPgBackend(ctx context.Context, connectString string, opts ...ConfigOptio
 	n = w
 
 	return
+}
+
+// WithConnectionString configures neoq to use connection string for backend initialization
+func WithConnectionString(connectionString string) PgConfigOption {
+	return func(p *PgBackend) {
+		p.config.connectString = connectionString
+	}
 }
 
 // pgConfig configures NeoqPg's general behavior
@@ -283,7 +298,7 @@ func (w PgBackend) initializeDB(ctx context.Context) (err error) {
 }
 
 // Enqueue adds jobs to the specified queue
-func (w *PgBackend) Enqueue(ctx context.Context, job Job) (jobID int64, err error) {
+func (w *PgBackend) Enqueue(ctx context.Context, job jobs.Job) (jobID int64, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	w.mu.Lock()
 	w.cancelFuncs = append(w.cancelFuncs, cancel)
@@ -319,7 +334,7 @@ func (w *PgBackend) Enqueue(ctx context.Context, job Job) (jobID int64, err erro
 
 	jobID, err = w.enqueueJob(ctx, tx, job)
 
-	if err != nil || jobID == DuplicateJobID {
+	if err != nil || jobID == internal.DuplicateJobID {
 		return
 	}
 
@@ -346,7 +361,7 @@ func (w *PgBackend) Enqueue(ctx context.Context, job Job) (jobID int64, err erro
 // Listen sets the queue handler function for the specified queue.
 //
 // Neoq will not process any queues until Listen() is called at least once.
-func (w *PgBackend) Listen(ctx context.Context, queue string, h Handler) (err error) {
+func (w *PgBackend) Listen(ctx context.Context, queue string, h handler.Handler) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	w.mu.Lock()
@@ -364,7 +379,7 @@ func (w *PgBackend) Listen(ctx context.Context, queue string, h Handler) (err er
 // ListenCron listens for jobs on a cron schedule and handles them with the provided handler
 //
 // See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
-func (w *PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) (err error) {
+func (w *PgBackend) ListenCron(ctx context.Context, cronSpec string, h handler.Handler) (err error) {
 	cd, err := crondescriptor.NewCronDescriptor(cronSpec)
 	if err != nil {
 		return err
@@ -375,7 +390,7 @@ func (w *PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) 
 		return err
 	}
 
-	queue := stripNonAlphanum(strcase.ToSnake(*cdStr))
+	queue := internal.StripNonAlphanum(strcase.ToSnake(*cdStr))
 	ctx, cancel := context.WithCancel(ctx)
 
 	w.mu.Lock()
@@ -383,7 +398,7 @@ func (w *PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) 
 	w.mu.Unlock()
 
 	w.cron.AddFunc(cronSpec, func() {
-		w.Enqueue(ctx, Job{Queue: queue})
+		w.Enqueue(ctx, jobs.Job{Queue: queue})
 	})
 
 	err = w.Listen(ctx, queue, h)
@@ -392,7 +407,7 @@ func (w *PgBackend) ListenCron(ctx context.Context, cronSpec string, h Handler) 
 }
 
 // SetLogger sets this backend's logger
-func (w *PgBackend) SetLogger(logger Logger) {
+func (w *PgBackend) SetLogger(logger logging.Logger) {
 	w.logger = logger
 }
 
@@ -411,9 +426,9 @@ func (w *PgBackend) Shutdown(ctx context.Context) {
 //
 // Jobs that are not already fingerprinted are fingerprinted before being added
 // Duplicate jobs are not added to the queue. Any two unprocessed jobs with the same fingerprint are duplicates
-func (w PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j Job) (jobID int64, err error) {
+func (w PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j jobs.Job) (jobID int64, err error) {
 
-	err = fingerprintJob(&j)
+	err = jobs.FingerprintJob(&j)
 	if err != nil {
 		return
 	}
@@ -430,7 +445,7 @@ func (w PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j Job) (jobID int6
 
 	// this is a duplicate job; skip it
 	if rowCount > 0 {
-		return DuplicateJobID, nil
+		return internal.DuplicateJobID, nil
 	}
 
 	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after)
@@ -444,7 +459,7 @@ func (w PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j Job) (jobID int6
 }
 
 // moveToDeadQueue moves jobs from the pending queue to the dead queue
-func (w PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *Job, jobErr error) (err error) {
+func (w PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *jobs.Job, jobErr error) (err error) {
 	_, err = tx.Exec(ctx, "DELETE FROM neoq_jobs WHERE id = $1", j.ID)
 	if err != nil {
 		return
@@ -465,21 +480,21 @@ func (w PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *Job, jobEr
 // TODO: Handle dropped connections when updating job status in PgBackend
 // e.g. acquiring a new connection in the event of connection failure
 func (w PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
-	status := JobStatusProcessed
+	status := internal.JobStatusProcessed
 	errMsg := ""
 
 	if jobErr != nil {
-		status = JobStatusFailed
+		status = internal.JobStatusFailed
 		errMsg = jobErr.Error()
 	}
 
-	var job *Job
-	if job, err = JobFromContext(ctx); err != nil {
+	var job *jobs.Job
+	if job, err = nctx.JobFromContext(ctx); err != nil {
 		return errors.New("unable to get job from context")
 	}
 
 	var tx pgx.Tx
-	if tx, err = txFromContext(ctx); err != nil {
+	if tx, err = nctx.TxFromContext(ctx); err != nil {
 		return errors.New("unable to get transaction from context")
 	}
 
@@ -489,11 +504,11 @@ func (w PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 	}
 
 	var runAfter time.Time
-	if job.Retries > 0 && status == JobStatusFailed {
-		runAfter = calculateBackoff(job.Retries)
+	if job.Retries > 0 && status == internal.JobStatusFailed {
+		runAfter = internal.CalculateBackoff(job.Retries)
 		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3, retries = $4, run_after = $5 WHERE id = $6"
 		_, err = tx.Exec(ctx, qstr, time.Now(), errMsg, status, job.Retries, runAfter, job.ID)
-	} else if job.Retries > 0 && status != JobStatusFailed {
+	} else if job.Retries > 0 && status != internal.JobStatusFailed {
 		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3, retries = $4 WHERE id = $5"
 		_, err = tx.Exec(ctx, qstr, time.Now(), errMsg, status, job.Retries, job.ID)
 	} else {
@@ -512,7 +527,7 @@ func (w PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 
 // start starts a queue listener, processes pending job, and fires up goroutines to process future jobs
 func (w PgBackend) start(ctx context.Context, queue string) (err error) {
-	var handler Handler
+	var handler handler.Handler
 	var ok bool
 	if handler, ok = w.handlers[queue]; !ok {
 		return fmt.Errorf("no handler for queue: %s", queue)
@@ -539,7 +554,7 @@ func (w PgBackend) start(ctx context.Context, queue string) (err error) {
 	// TODO consider performance implications of `scheduleFutureJobs` in PgBackend
 	go func() { w.scheduleFutureJobs(ctx, queue) }()
 
-	for i := 0; i < handler.concurrency; i++ {
+	for i := 0; i < handler.Concurrency; i++ {
 		go func() {
 			var err error
 			var jobID int64
@@ -609,7 +624,7 @@ func (w PgBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 		// loop over list of future jobs, scheduling goroutines to wait for jobs that are due within the next 30 seconds
 		for jobID, runAfter := range w.futureJobs {
 			timeUntillRunAfter := time.Until(runAfter)
-			if timeUntillRunAfter <= DefaultFutureJobWindow {
+			if timeUntillRunAfter <= internal.DefaultFutureJobWindow {
 				w.removeFutureJob(jobID)
 				go func(jid int64) {
 					scheduleCh := time.After(timeUntillRunAfter)
@@ -695,7 +710,7 @@ func (w PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan i
 // it receives pending, periodic, and retry job ids asynchronously
 // 1. handleJob first creates a transactions inside of which a row lock is acquired for the job to be processed.
 // 2. handleJob secondly calls the handler on the job, and finally updates the job's status
-func (w PgBackend) handleJob(ctx context.Context, jobID int64, handler Handler) (err error) {
+func (w PgBackend) handleJob(ctx context.Context, jobID int64, h handler.Handler) (err error) {
 	var tx pgx.Tx
 	conn, err := w.pool.Acquire(ctx)
 	if err != nil {
@@ -709,23 +724,23 @@ func (w PgBackend) handleJob(ctx context.Context, jobID int64, handler Handler) 
 	}
 	defer tx.Rollback(ctx) // rollback has no effect if the transaction has been committed
 
-	ctxv := handlerCtxVars{tx: tx}
-	var job Job
+	ctxv := nctx.HandlerCtxVars{Tx: tx}
+	var job *jobs.Job
 	job, err = w.getPendingJob(ctx, tx, jobID)
 	if err != nil {
 		return
 	}
 
-	ctxv.job = &job
-	ctx = withHandlerContext(ctx, ctxv)
+	ctxv.Job = job
+	ctx = handler.WithHandlerContext(ctx, ctxv)
 
 	// check if the job is being retried and increment retry count accordingly
-	if job.Status != JobStatusNew {
+	if job.Status != internal.JobStatusNew {
 		job.Retries = job.Retries + 1
 	}
 
 	// execute the queue handler of this job
-	jobErr := execHandler(ctx, handler)
+	jobErr := handler.ExecHandler(ctx, h)
 	err = w.updateJob(ctx, jobErr)
 	if err != nil {
 		err = fmt.Errorf("error updating job status: %w", err)
@@ -787,19 +802,18 @@ func (w PgBackend) listen(ctx context.Context, queue string) (c chan int64) {
 	return
 }
 
-func (w PgBackend) getPendingJob(ctx context.Context, tx pgx.Tx, jobID int64) (job Job, err error) {
+func (w PgBackend) getPendingJob(ctx context.Context, tx pgx.Tx, jobID int64) (job *jobs.Job, err error) {
 	row, err := tx.Query(ctx, PendingJobQuery, jobID)
 	if err != nil {
 		return
 	}
 
-	var j *Job
-	j, err = pgx.CollectOneRow(row, pgx.RowToAddrOfStructByName[Job])
+	job, err = pgx.CollectOneRow(row, pgx.RowToAddrOfStructByName[jobs.Job])
 	if err != nil {
 		return
 	}
 
-	return *j, err
+	return
 }
 
 func (w PgBackend) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queue string) (jobID int64, err error) {
@@ -815,20 +829,13 @@ func (w PgBackend) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queu
 //
 // PgTransactionTimeout is best set when calling neoq.New() rather than after creation using WithConfig() because this
 // setting results in the creation of a new database connection pool.
-func PgTransactionTimeout(txTimeout int) ConfigOption {
-	return func(n Neoq) {
-		var ok bool
-		var npg *PgBackend
-
-		if npg, ok = n.(*PgBackend); !ok {
-			return
-		}
-
-		npg.config.idleTxTimeout = txTimeout
+func PgTransactionTimeout(txTimeout int) PgConfigOption {
+	return func(p *PgBackend) {
+		p.config.idleTxTimeout = txTimeout
 
 		// if the worker already has a pool configured, then setting the transaction timeout prints a warning and is a
 		// no-op
-		if npg.pool != nil {
+		if p.pool != nil {
 			log.Println("create a new Neoq instance to set transaction timeout")
 			return
 		}
@@ -836,16 +843,16 @@ func PgTransactionTimeout(txTimeout int) ConfigOption {
 		var err error
 		var poolConfig *pgxpool.Config
 
-		poolConfig, err = pgxpool.ParseConfig(npg.config.connectString)
-		if err != nil || npg.config.connectString == "" {
+		poolConfig, err = pgxpool.ParseConfig(p.config.connectString)
+		if err != nil || p.config.connectString == "" {
 			return
 		}
 
 		// ensure that workers don't consume connections with idle transactions
 		poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) (err error) {
 			var query string
-			if npg.config.idleTxTimeout > 0 {
-				query = fmt.Sprintf("SET idle_in_transaction_session_timeout = '%dms'", npg.config.idleTxTimeout)
+			if p.config.idleTxTimeout > 0 {
+				query = fmt.Sprintf("SET idle_in_transaction_session_timeout = '%dms'", p.config.idleTxTimeout)
 			} else {
 				// there is no limit to the amount of time a worker's transactions may be idle
 				query = "SET idle_in_transaction_session_timeout = 0"
@@ -854,24 +861,9 @@ func PgTransactionTimeout(txTimeout int) ConfigOption {
 			return
 		}
 
-		npg.pool, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
+		p.pool, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
 		if err != nil {
 			return
 		}
 	}
-}
-
-func stripNonAlphanum(s string) string {
-	var result strings.Builder
-	for i := 0; i < len(s); i++ {
-		b := s[i]
-		if (b == '_') ||
-			('a' <= b && b <= 'z') ||
-			('A' <= b && b <= 'Z') ||
-			('0' <= b && b <= '9') ||
-			b == ' ' {
-			result.WriteByte(b)
-		}
-	}
-	return result.String()
 }
