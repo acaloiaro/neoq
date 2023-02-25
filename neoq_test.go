@@ -5,33 +5,89 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/acaloiaro/neoq/backends/memory"
+	"github.com/acaloiaro/neoq/backends/postgres"
+	"github.com/acaloiaro/neoq/config"
+	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/jobs"
+	"github.com/acaloiaro/neoq/testutils"
 )
 
 var errTrigger = errors.New("triggerering a log error")
 var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
 
-type testLogger struct {
-	l    *log.Logger
-	done chan bool
+func ExampleNew() {
+	ctx := context.Background()
+	nq, err := New(ctx, WithBackend(memory.Backend))
+	if err != nil {
+		fmt.Println("initializing a new Neoq with no params should not return an error:", err)
+		return
+	}
+	defer nq.Shutdown(ctx)
+
+	fmt.Println("neoq initialized with default memory backend")
+	// Output: neoq initialized with default memory backend
 }
 
-func (h testLogger) Info(m string, args ...any) {
-	h.l.Println(m)
-	h.done <- true
-}
-func (h testLogger) Debug(m string, args ...any) {
-	h.l.Println(m)
-	h.done <- true
-}
-func (h testLogger) Error(m string, err error, args ...any) {
-	h.l.Println(m, err)
-	h.done <- true
+func ExampleNew_postgres() {
+	ctx := context.Background()
+	var pgURL string
+	var ok bool
+	if pgURL, ok = os.LookupEnv("TEST_DATABASE_URL"); !ok {
+		fmt.Println("Please set TEST_DATABASE_URL environment variable")
+		return
+	}
+
+	nq, err := New(ctx, WithBackend(postgres.Backend), config.WithConnectionString(pgURL))
+	if err != nil {
+		fmt.Println("neoq's postgres backend failed to initialize:", err)
+		return
+	}
+	defer nq.Shutdown(ctx)
+
+	fmt.Println("neoq initialized with postgres backend")
+	// Output: neoq initialized with postgres backend
 }
 
-func TestWorkerListenConn(t *testing.T) {
+func ExampleWithBackend() {
+	ctx := context.Background()
+	nq, err := New(ctx, WithBackend(memory.Backend))
+	if err != nil {
+		fmt.Println("initializing a new Neoq with no params should not return an error:", err)
+		return
+	}
+	defer nq.Shutdown(ctx)
+
+	fmt.Println("neoq initialized with memory backend")
+	// Output: neoq initialized with memory backend
+}
+
+func ExampleWithBackend_postgres() {
+	ctx := context.Background()
+	var pgURL string
+	var ok bool
+	if pgURL, ok = os.LookupEnv("TEST_DATABASE_URL"); !ok {
+		fmt.Println("Please set TEST_DATABASE_URL environment variable")
+		return
+	}
+
+	nq, err := New(ctx, WithBackend(postgres.Backend), config.WithConnectionString(pgURL))
+	if err != nil {
+		fmt.Println("initializing a new Neoq with no params should not return an error:", err)
+		return
+	}
+	defer nq.Shutdown(ctx)
+
+	fmt.Println("neoq initialized with postgres backend")
+	// Output: neoq initialized with postgres backend
+}
+
+func TestStart(t *testing.T) {
 	const queue = "testing"
 	timeout := false
 	numJobs := 1
@@ -39,38 +95,32 @@ func TestWorkerListenConn(t *testing.T) {
 	var done = make(chan bool, numJobs)
 
 	ctx := context.TODO()
-	backend, err := NewMemBackend()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	nq, err := New(ctx, WithBackend(backend))
+	nq, err := New(ctx, WithBackend(memory.Backend))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer nq.Shutdown(ctx)
 
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})
-	handler.WithOptions(
-		HandlerDeadline(500*time.Millisecond),
-		HandlerConcurrency(1),
+	h.WithOptions(
+		handler.Deadline(500*time.Millisecond),
+		handler.Concurrency(1),
 	)
 
+	// process jobs on the test queue
+	err = nq.Start(ctx, queue, h)
 	if err != nil {
 		t.Error(err)
 	}
 
-	// Listen for jobs on the queue
-	nq.Listen(ctx, queue, handler)
-
-	// allow time for listener to start
+	// allow time for processor to start
 	time.Sleep(5 * time.Millisecond)
 
 	for i := 0; i < numJobs; i++ {
-		jid, err := nq.Enqueue(ctx, Job{
+		jid, err := nq.Enqueue(ctx, &jobs.Job{
 			Queue: queue,
 			Payload: map[string]interface{}{
 				"message": fmt.Sprintf("hello world: %d", i),
@@ -85,7 +135,7 @@ func TestWorkerListenConn(t *testing.T) {
 		select {
 		case <-time.After(5 * time.Second):
 			timeout = true
-			err = errors.New("timed out waiting for job")
+			err = errors.New("timed out waiting for job") // nolint: goerr113
 		case <-done:
 			doneCnt++
 		}
@@ -104,31 +154,30 @@ func TestWorkerListenConn(t *testing.T) {
 	}
 }
 
-func TestWorkerListenCron(t *testing.T) {
+func TestStartCron(t *testing.T) {
 	const cron = "* * * * * *"
 	ctx := context.TODO()
-	nq, err := New(ctx)
+	nq, err := New(ctx, WithBackend(memory.Backend))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer nq.Shutdown(ctx)
 
 	var done = make(chan bool)
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	handler.WithOptions(
-		HandlerDeadline(500*time.Millisecond),
-		HandlerConcurrency(1),
+	h.WithOptions(
+		handler.Deadline(500*time.Millisecond),
+		handler.Concurrency(1),
 	)
 
+	err = nq.StartCron(ctx, cron, h)
 	if err != nil {
 		t.Error(err)
 	}
-
-	nq.ListenCron(ctx, cron, handler)
 
 	// allow time for listener to start
 	time.Sleep(5 * time.Millisecond)
@@ -144,20 +193,21 @@ func TestWorkerListenCron(t *testing.T) {
 	}
 }
 
-func TestNeoqAddLogger(t *testing.T) {
+func TestSetLogger(t *testing.T) {
 	const queue = "testing"
 	var done = make(chan bool)
-
+	buf := &strings.Builder{}
 	ctx := context.TODO()
 
-	buf := &strings.Builder{}
-	nq, err := New(ctx, WithLogger(testLogger{l: log.New(buf, "", 0), done: done}))
+	nq, err := New(ctx, WithBackend(memory.Backend))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer nq.Shutdown(ctx)
 
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	nq.SetLogger(testutils.TestLogger{L: log.New(buf, "", 0), Done: done})
+
+	h := handler.New(func(ctx context.Context) (err error) {
 		err = errTrigger
 		return
 	})
@@ -165,13 +215,12 @@ func TestNeoqAddLogger(t *testing.T) {
 		t.Error(err)
 	}
 
-	// Listen for jobs on the queue
-	err = nq.Listen(ctx, queue, handler)
+	err = nq.Start(ctx, queue, h)
 	if err != nil {
 		t.Error(err)
 	}
 
-	_, err = nq.Enqueue(ctx, Job{Queue: queue})
+	_, err = nq.Enqueue(ctx, &jobs.Job{Queue: queue})
 	if err != nil {
 		t.Error(err)
 	}

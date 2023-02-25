@@ -41,13 +41,13 @@ Queue handlers listen for Jobs on queues. Jobs may consist of any payload that i
 
 Queue Handlers are simple Go functions that accept a `Context` parameter.
 
-**Example**: Add a listener on the `hello_world` queue
+**Example**: Add a listener on the `hello_world` queue using the default in-memory backend
 
 ```go
 ctx := context.Background()
 nq, _ := neoq.New(ctx)
-nq.Listen(ctx, "hello_world", neoq.NewHandler(func(ctx context.Context) (err error) {
-  j, err := neoq.JobFromContext(ctx)
+nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
+  j, _ := handler.JobFromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
   return
 }))
@@ -55,12 +55,14 @@ nq.Listen(ctx, "hello_world", neoq.NewHandler(func(ctx context.Context) (err err
 
 ## Enqueue jobs
 
-**Example**: Add a "Hello World" job to the `hello_world` queue
+Enqueuing jobs adds jobs to the specified queue to be processed asynchronously.
+
+**Example**: Add a "Hello World" job to the `hello_world` queue using the default in-memory backend.
 
 ```go
 ctx := context.Background()
 nq, _ := neoq.New(ctx)
-jid, _ := nq.Enqueue(ctx, neoq.Job{
+jid, _ := nq.Enqueue(ctx, &jobs.Job{
   Queue: "hello_world",
   Payload: map[string]interface{}{
     "message": "hello world",
@@ -68,6 +70,30 @@ jid, _ := nq.Enqueue(ctx, neoq.Job{
 })
 ```
 
+## Postgres
+
+**Example**: Process jobs on the "hello_world" queue and add a job to it using the postgres backend
+
+```go
+ctx := context.Background()
+nq, _ := neoq.New(ctx,
+  neoq.WithBackend(postgres.Backend),
+  config.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"),
+)
+
+nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
+  j, _ := handler.JobFromContext(ctx)
+  log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
+  return
+}))
+
+nq.Enqueue(ctx, &jobs.Job{
+  Queue: "hello_world",
+  Payload: map[string]interface{}{
+    "message": "hello world",
+  },
+})
+```
 # Example Code
 
 Additional example integration code can be found at https://github.com/acaloiaro/neoq/tree/main/examples

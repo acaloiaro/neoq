@@ -1,382 +1,59 @@
-// Package neoq provides background job processing for Go applications.
-//
-// Neoq's goal is to minimize the infrastructure necessary to add background job processing to Go applications. It does so by implementing queue durability with modular backends, rather than introducing a strict dependency on a particular backend such as Redis.
-//
-// An in-memory and Postgres backend are provided out of the box.
 package neoq
 
-// TODO factor out the following dependencies
-// "github.com/iancoleman/strcase"
-// "github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 import (
 	"context"
-	"crypto/md5"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"math"
-	"runtime"
 	"time"
 
-	"math/rand"
-
-	"github.com/guregu/null"
-	"github.com/jackc/pgx/v5"
+	"github.com/acaloiaro/neoq/backends/memory"
+	"github.com/acaloiaro/neoq/config"
+	"github.com/acaloiaro/neoq/types"
 )
 
-type contextKey int
-
-var varsKey contextKey
-
-const (
-	JobStatusNew              = "new"
-	JobStatusProcessed        = "processed"
-	JobStatusFailed           = "failed"
-	DefaultTransactionTimeout = time.Minute
-	DefaultHandlerDeadline    = 30 * time.Second
-	DuplicateJobID            = -1
-	UnqueuedJobID             = -2
-	DefaultJobCheckInterval   = 5 * time.Second
-	// the window of time between time.Now() and when a job's RunAfter comes due that neoq will schedule a goroutine to
-	// schdule the job for execution.
-	// E.g. right now is 16:00 and a job's RunAfter is 16:30 of the same date. This job will get a dedicated goroutine to
-	// wait until the job's RunAfter, scheduling the job to be run exactly at RunAfter
-	DefaultFutureJobWindow = 30 * time.Second
+var (
+	ErrConnectionStringRequired = errors.New("a connection string is required for this backend. See [config.WithConnectionString]")
+	ErrNoBackendSpecified       = errors.New("please specify a backend by using [config.WithBackend]")
 )
 
-// Neoq interface is Neoq's primary API
-type Neoq interface {
-	// Enqueue queues jobs to be executed asynchronously
-	Enqueue(ctx context.Context, job Job) (jobID int64, err error)
-
-	// Listen listens for jobs on a queue and processes them with the given handler
-	Listen(ctx context.Context, queue string, h Handler) (err error)
-
-	// ListenCron listens for jobs on a cron schedule and processes them with the given handler
-	//
-	// See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
-	ListenCron(ctx context.Context, cron string, h Handler) (err error)
-
-	// SetLogger sets the logger for a backend
-	SetLogger(logger Logger)
-
-	// Shutdown halts job processing and releases resources
-	Shutdown(ctx context.Context)
-}
-
-// Logger interface is the interface that neoq's logger must implement
+// New creates a new backend instance for job processing.
 //
-// This interface is a subset of [slog.Logger]. The slog interface was chosen under the assumption that its
-// likely to be Golang's standard library logging interface.
-type Logger interface {
-	Debug(msg string, args ...any)
-	Error(msg string, err error, args ...any)
-	Info(msg string, args ...any)
-}
-
-// HandlerFunc is a function that Handlers execute for every Job on a queue
-type HandlerFunc func(ctx context.Context) error
-
-// Handler handles jobs on a queue
-type Handler struct {
-	handle        HandlerFunc
-	concurrency   int
-	deadline      time.Duration
-	queueCapacity int64
-}
-
-// HandlerOption is function that sets optional configuration for Handlers
-type HandlerOption func(w *Handler)
-
-// WithOptions sets one or more options on handler
-func (h *Handler) WithOptions(opts ...HandlerOption) {
+// By default, neoq initializes [memory.Backend] if New() is called without a backend configuration option.
+//
+// Use [neoq.WithBackend] to initialize different backends.
+//
+// For available configuration options see [config.ConfigOption].
+func New(ctx context.Context, opts ...config.Option) (b types.Backend, err error) {
+	c := config.Config{}
 	for _, opt := range opts {
-		opt(h)
-	}
-}
-
-// HandlerDeadline configures handlers with a time deadline for every executed job
-// The deadline is the amount of time that can be spent executing the handler's HandlerFunc
-// when a deadline is exceeded, the job is failed and enters its retry phase
-func HandlerDeadline(d time.Duration) HandlerOption {
-	return func(h *Handler) {
-		h.deadline = d
-	}
-}
-
-// HandlerConcurrency configures Neoq handlers to process jobs concurrently
-// the default concurrency is the number of (v)CPUs on the machine running Neoq
-func HandlerConcurrency(c int) HandlerOption {
-	return func(h *Handler) {
-		h.concurrency = c
-	}
-}
-
-// MaxQueueCapacity configures Handlers to enforce a maximum capacity on the queues that it handles
-// queues that have reached capacity cause Enqueue() to block until the queue is below capacity
-func MaxQueueCapacity(capacity int64) HandlerOption {
-	return func(h *Handler) {
-		h.queueCapacity = capacity
-	}
-}
-
-// NewHandler creates a new queue handler
-func NewHandler(f HandlerFunc, opts ...HandlerOption) (h Handler) {
-	h = Handler{
-		handle: f,
+		opt(&c)
 	}
 
-	h.WithOptions(opts...)
-
-	// default to running one fewer threads than CPUs
-	if h.concurrency == 0 {
-		HandlerConcurrency(runtime.NumCPU() - 1)(&h)
+	if c.BackendInitializer == nil {
+		c.BackendInitializer = memory.Backend
 	}
 
-	// always set a job deadline if none is set
-	if h.deadline == 0 {
-		HandlerDeadline(DefaultHandlerDeadline)(&h)
-	}
-
-	return
-}
-
-// ConfigOption is a function that sets optional Neoq configuration
-type ConfigOption func(n Neoq)
-
-// Job contains all the data pertaining to jobs
-//
-// Jobs are what are placed on queues for processing.
-//
-// The Fingerprint field can be supplied by the user to impact job deduplication.
-// TODO Factor out usage of the null package: github.com/guregu/null
-type Job struct {
-	ID          int64          `db:"id"`
-	Fingerprint string         `db:"fingerprint"` // A md5 sum of the job's queue + payload, affects job deduplication
-	Status      string         `db:"status"`      // The status of the job
-	Queue       string         `db:"queue"`       // The queue the job is on
-	Payload     map[string]any `db:"payload"`     // JSON job payload for more complex jobs
-	RunAfter    time.Time      `db:"run_after"`   // The time after which the job is elligible to be picked up by a worker
-	RanAt       null.Time      `db:"ran_at"`      // The last time the job ran
-	Error       null.String    `db:"error"`       // The last error the job elicited
-	Retries     int            `db:"retries"`     // The number of times the job has retried
-	MaxRetries  int            `db:"max_retries"` // The maximum number of times the job can retry
-	CreatedAt   time.Time      `db:"created_at"`  // The time the job was created
-}
-
-// New creates a new Neoq instance for listening to queues and enqueing new jobs
-func New(ctx context.Context, opts ...ConfigOption) (n Neoq, err error) {
-	ic := internalConfig{}
-	for _, opt := range opts {
-		opt(&ic)
-	}
-
-	if ic.backend != nil {
-		n = *ic.backend
+	b, err = c.BackendInitializer(ctx, opts...)
+	if err != nil {
 		return
 	}
 
-	switch ic.backendName {
-	case postgresBackendName:
-		if ic.connectionString == "" {
-			err = errors.New("your must provide a postgres connection string to initialize the postgres backend: see neoq.ConnectionString(...)")
-			return
-		}
-		n, err = NewPgBackend(ctx, ic.connectionString, opts...)
-	default:
-		n, err = NewMemBackend(opts...)
-	}
-
 	return
 }
 
-// JobFromContext fetches the job from a context if the job context variable is already set
-func JobFromContext(ctx context.Context) (j *Job, err error) {
-	if v, ok := ctx.Value(varsKey).(handlerCtxVars); ok {
-		j = v.job
-	} else {
-		err = errors.New("context does not have a Job set")
-	}
-
-	return
-}
-
-// WithBackendName configures neoq to create a new backend with the given name upon
-// initialization
-func WithBackendName(backendName string) ConfigOption {
-	return func(n Neoq) {
-		switch c := n.(type) {
-		case *internalConfig:
-			c.backendName = backendName
-		default:
-		}
+// WithBackend configures neoq to initialize a specific backend for job processing.
+//
+// Neoq provides two [config.BackendInitializer] that may be used with WithBackend
+//   - [pkg/github.com/acaloiaro/neoq/backends/memory.Backend]
+//   - [pkg/github.com/acaloiaro/neoq/backends/postgres.Backend]
+func WithBackend(initializer config.BackendInitializer) config.Option {
+	return func(c *config.Config) {
+		c.BackendInitializer = initializer
 	}
 }
 
 // WithJobCheckInterval configures the duration of time between checking for future jobs
-func WithJobCheckInterval(interval time.Duration) ConfigOption {
-	return func(n Neoq) {
-		switch b := n.(type) {
-		case *internalConfig:
-			b.jobCheckInterval = interval
-		case *MemBackend:
-			b.jobCheckInterval = interval
-		case *PgBackend:
-			b.jobCheckInterval = interval
-		default:
-		}
+func WithJobCheckInterval(interval time.Duration) config.Option {
+	return func(c *config.Config) {
+		c.JobCheckInterval = interval
 	}
-}
-
-// WithBackend configures neoq to use the specified backend rather than initializing a new one
-// during initialization
-func WithBackend(backend Neoq) ConfigOption {
-	return func(n Neoq) {
-		switch c := n.(type) {
-		case *internalConfig:
-			c.backend = &backend
-		default:
-		}
-	}
-}
-
-// WithConnectionString configures neoq to use connection string for backend initialization
-func WithConnectionString(connectionString string) ConfigOption {
-	return func(n Neoq) {
-		switch c := n.(type) {
-		case *internalConfig:
-			c.connectionString = connectionString
-		case *PgBackend:
-			c.config.connectString = connectionString
-		default:
-		}
-	}
-}
-
-// WithLogger configures neoq to use the spcified logger
-func WithLogger(logger Logger) ConfigOption {
-	return func(n Neoq) {
-		switch b := n.(type) {
-		case *MemBackend:
-			b.logger = logger
-		case *PgBackend:
-			b.logger = logger
-		default:
-		}
-	}
-}
-
-// handlerCtxVars are variables passed to every Handler context
-type handlerCtxVars struct {
-	job *Job
-	tx  pgx.Tx
-}
-
-// withHandlerContext creates a new context with the job and transaction set
-func withHandlerContext(ctx context.Context, v handlerCtxVars) context.Context {
-	return context.WithValue(ctx, varsKey, v)
-}
-
-// txFromContext gets the transaction from a context, if the the transaction is already set
-func txFromContext(ctx context.Context) (t pgx.Tx, err error) {
-	if v, ok := ctx.Value(varsKey).(handlerCtxVars); ok {
-		t = v.tx
-	} else {
-		err = errors.New("context does not have a Tx set")
-	}
-
-	return
-}
-
-// calculateBackoff calculates the number of seconds to back off before the next retry
-// this formula is unabashedly taken from Sidekiq because it is good.
-func calculateBackoff(retryCount int) time.Time {
-	p := int(math.Round(math.Pow(float64(retryCount), 4)))
-	return time.Now().Add(time.Duration(p+15+randInt(30)*retryCount+1) * time.Second)
-}
-
-func randInt(max int) int {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	return r.Intn(max)
-}
-
-// internalConfig models internal neoq configuratio not exposed to users
-type internalConfig struct {
-	backendName      string        // the name of a known backend
-	backend          *Neoq         // user-provided backend to use
-	connectionString string        // a connection string to use connecting to a backend
-	jobCheckInterval time.Duration // the duration of time between checking for future jobs to schedule
-}
-
-func (i internalConfig) Enqueue(ctx context.Context, job Job) (jobID int64, err error) {
-	return
-}
-
-func (i internalConfig) Listen(ctx context.Context, queue string, h Handler) (err error) {
-	return
-}
-
-func (i internalConfig) ListenCron(ctx context.Context, cron string, h Handler) (err error) {
-	return
-}
-
-func (i internalConfig) SetLogger(logger Logger) {
-	return
-}
-
-func (i internalConfig) Shutdown(ctx context.Context) {}
-
-// exechandler executes handler functions with a concrete time deadline
-func execHandler(ctx context.Context, handler Handler) (err error) {
-	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(handler.deadline))
-	defer cancel()
-
-	var errCh = make(chan error, 1)
-	var done = make(chan bool)
-	go func(ctx context.Context) (e error) {
-		errCh <- handler.handle(ctx)
-		done <- true
-		return
-	}(ctx)
-
-	select {
-	case <-done:
-		err = <-errCh
-		if err != nil {
-			err = fmt.Errorf("job failed to process: %w", err)
-		}
-
-	case <-deadlineCtx.Done():
-		ctxErr := deadlineCtx.Err()
-		if errors.Is(ctxErr, context.DeadlineExceeded) {
-			err = fmt.Errorf("job exceeded its %s deadline: %w", handler.deadline, ctxErr)
-		} else if errors.Is(ctxErr, context.Canceled) {
-			err = nil
-		} else {
-			err = fmt.Errorf("job failed to process: %w", ctxErr)
-		}
-	}
-
-	return
-}
-
-// fingerprintJob fingerprints jobs as an md5 hash of its queue combined with its JSON-serialized payload
-func fingerprintJob(j *Job) (err error) {
-	// only generate a fingerprint if the job is not already fingerprinted
-	if j.Fingerprint != "" {
-		return
-	}
-
-	var js []byte
-	js, err = json.Marshal(j.Payload)
-	if err != nil {
-		return
-	}
-	h := md5.New()
-	io.WriteString(h, j.Queue)
-	io.WriteString(h, string(js))
-	j.Fingerprint = fmt.Sprintf("%x", h.Sum(nil))
-
-	return
 }

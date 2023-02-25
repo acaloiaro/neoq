@@ -5,13 +5,16 @@ import (
 	"log"
 
 	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends/memory"
+	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/jobs"
 )
 
 func main() {
 	var err error
 	const queue = "foobar"
 	ctx := context.Background()
-	nq, err := neoq.New(ctx)
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 	if err != nil {
 		log.Fatalf("error initializing neoq: %v", err)
 	}
@@ -22,24 +25,24 @@ func main() {
 
 	// Concurrency and other options may be set on handlers both during creation (Option 1), or after the fact (Option 2)
 	// Option 1: add options when creating the handler
-	handler := neoq.NewHandler(func(ctx context.Context) (err error) {
-		var j *neoq.Job
-		j, err = neoq.JobFromContext(ctx)
+	h := handler.New(func(ctx context.Context) (err error) {
+		var j *jobs.Job
+		j, err = handler.JobFromContext(ctx)
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
 		done <- true
 		return
-	}, neoq.HandlerConcurrency(8))
+	}, handler.Concurrency(8))
 
 	// Option 2: Set options after the handler is created
-	handler.WithOptions(neoq.HandlerConcurrency(8))
+	h.WithOptions(handler.Concurrency(8))
 
-	err = nq.Listen(ctx, queue, handler)
+	err = nq.Start(ctx, queue, h)
 	if err != nil {
 		log.Println("error listening to queue", err)
 	}
 
 	// enqueue a job
-	_, err = nq.Enqueue(ctx, neoq.Job{
+	_, err = nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
 			"message": "hello, world",
@@ -53,5 +56,5 @@ func main() {
 
 	// job's status will be 'failed' and 'error' will be 'job exceeded its 10ms deadline'
 	// until either the job's Sleep statement is decreased/removed or the handler's deadline is increased
-	// this job will continue to to fail and ultimately land on the dead jobs queue
+	// this job will continue to fail and ultimately land on the dead jobs queue
 }

@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends/memory"
+	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/jobs"
 )
 
 func main() {
@@ -16,7 +19,7 @@ func main() {
 	// by default neoq connects to a local postgres server using: [neoq.DefaultPgConnectionString]
 	// connection strings can be set explicitly as follows:
 	// neoq.New(neoq.ConnectionString("postgres://username:passsword@hostname/database"))
-	nq, err := neoq.New(ctx)
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 	if err != nil {
 		log.Fatalf("error initializing neoq: %v", err)
 	}
@@ -25,24 +28,24 @@ func main() {
 	// this is probably not a pattern you want to use in production jobs and you see it here only for testing reasons
 	done := make(chan bool)
 
-	handler := neoq.NewHandler(func(ctx context.Context) (err error) {
-		var j *neoq.Job
+	h := handler.New(func(ctx context.Context) (err error) {
+		var j *jobs.Job
 		time.Sleep(1 * time.Second)
-		j, err = neoq.JobFromContext(ctx)
+		j, err = handler.JobFromContext(ctx)
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
 		done <- true
 		return
 	})
 
 	// this 10ms deadline will cause our job that sleeps for 1s to fail
-	handler.WithOptions(neoq.HandlerDeadline(10 * time.Millisecond))
+	h.WithOptions(handler.Deadline(10 * time.Millisecond))
 
-	err = nq.Listen(ctx, queue, handler)
+	err = nq.Start(ctx, queue, h)
 	if err != nil {
 		log.Println("error listening to queue", err)
 	}
 
-	_, err = nq.Enqueue(ctx, neoq.Job{
+	_, err = nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
 			"message": "hello, world",
@@ -56,5 +59,5 @@ func main() {
 
 	// job's status will be 'failed' and 'error' will be 'job exceeded its 10ms deadline'
 	// until either the job's Sleep statement is decreased/removed or the handler's deadline is increased
-	// this job will continue to to fail and ultimately land on the dead jobs queue
+	// this job will continue to fail and ultimately land on the dead jobs queue
 }

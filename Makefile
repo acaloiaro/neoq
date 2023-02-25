@@ -26,6 +26,7 @@ test: install-gotestsum
 		-count=5 \
 		-race \
 		-cover \
+		-tags testing \
 		-coverprofile=tmp/coverage/coverage.out \
 		./...
 

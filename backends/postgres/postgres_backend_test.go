@@ -1,4 +1,4 @@
-package neoq
+package postgres_test
 
 import (
 	"context"
@@ -7,13 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends/postgres"
+	"github.com/acaloiaro/neoq/config"
+	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/jobs"
 	"github.com/pkg/errors"
 	"golang.org/x/exp/slog"
 )
 
-// TestPgBackendBasicJobProcessing tests that the postgres backend is able to process the most basic jobs with the
+// TestBasicJobProcessing tests that the postgres backend is able to process the most basic jobs with the
 // most basic configuration.
-func TestPgBackendBasicJobProcessing(t *testing.T) {
+func TestBasicJobProcessing(t *testing.T) {
 	queue := "testing"
 	numJobs := 10
 	doneCnt := 0
@@ -27,28 +32,32 @@ func TestPgBackendBasicJobProcessing(t *testing.T) {
 	}
 
 	ctx := context.TODO()
-	nq, err := NewPgBackend(ctx, connString)
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), config.WithConnectionString(connString))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer nq.Shutdown(ctx)
 
-	handler := NewHandler(func(ctx context.Context) (err error) {
+	h := handler.New(func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	nq.Listen(ctx, queue, handler)
+	err = nq.Start(ctx, queue, h)
+	if err != nil {
+		t.Error(err)
+	}
 
 	go func() {
 		for i := 0; i < numJobs; i++ {
-			jid, err := nq.Enqueue(ctx, Job{
+			jid, e := nq.Enqueue(ctx, &jobs.Job{
 				Queue: queue,
 				Payload: map[string]interface{}{
 					"message": fmt.Sprintf("hello world: %d", i),
 				},
 			})
-			if err != nil || jid == DuplicateJobID {
-				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", err)
+			if e != nil || jid == jobs.DuplicateJobID {
+				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", e)
 			}
 		}
 	}()
@@ -73,6 +82,4 @@ func TestPgBackendBasicJobProcessing(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-
-	nq.Shutdown(ctx)
 }
