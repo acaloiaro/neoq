@@ -62,7 +62,7 @@ Enqueuing jobs adds jobs to the specified queue to be processed asynchronously.
 ```go
 ctx := context.Background()
 nq, _ := neoq.New(ctx)
-jid, _ := nq.Enqueue(ctx, &jobs.Job{
+nq.Enqueue(ctx, &jobs.Job{
   Queue: "hello_world",
   Payload: map[string]interface{}{
     "message": "hello world",
