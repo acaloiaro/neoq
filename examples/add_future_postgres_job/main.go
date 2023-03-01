@@ -6,22 +6,25 @@ import (
 	"time"
 
 	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends/postgres"
+	"github.com/acaloiaro/neoq/config"
+	"github.com/acaloiaro/neoq/jobs"
 )
 
 func main() {
 	const queue = "foobar"
 	ctx := context.Background()
 	nq, err := neoq.New(ctx,
-		neoq.PgTransactionTimeout(1000),
-		neoq.WithBackendName("postgres"),
-		neoq.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"))
-
+		config.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"),
+		neoq.WithBackend(postgres.Backend),
+		postgres.WithTransactionTimeout(1000), // nolint: mnd, gomnd
+	)
 	if err != nil {
-		log.Fatalf("error initializing neoq: %v", err)
+		log.Fatalf("error initializing postgres backend: %v", err)
 	}
 
 	// Add a job that will execute 1 hour from now
-	jobID, err := nq.Enqueue(ctx, neoq.Job{
+	jobID, err := nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
 			"message": "hello, future world",
