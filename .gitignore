@@ -18,3 +18,5 @@ vendor/
 # Some tests require environment variables to be set
 .env
 
+
+dist/
