@@ -5,7 +5,7 @@ import (
 	"math"
 	"math/big"
 	"math/rand"
-	"strings"
+	"regexp"
 	"time"
 )
 
@@ -38,19 +38,8 @@ func RandInt(max int) int {
 	return int(r.Int64())
 }
 
-// StripNonALphanum strips nonalphanumeric characters from a string and returns a new one
-// TODO Replace `StripNonAlphanum` with strings.ReplaceAll
+// StripNonAlphanum strips nonalphanumeric/non underscore characters from a string and returns a new one
 func StripNonAlphanum(s string) string {
-	var result strings.Builder
-	for i := 0; i < len(s); i++ {
-		b := s[i]
-		if (b == '_') ||
-			('a' <= b && b <= 'z') ||
-			('A' <= b && b <= 'Z') ||
-			('0' <= b && b <= '9') ||
-			b == ' ' {
-			result.WriteByte(b)
-		}
-	}
-	return result.String()
+	re := regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	return re.ReplaceAllString(s, "")
 }
