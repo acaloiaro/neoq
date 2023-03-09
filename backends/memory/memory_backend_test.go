@@ -24,6 +24,8 @@ const (
 	queue = "testing"
 )
 
+var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
+
 // TestBasicJobProcessing tests that the memory backend is able to process the most basic jobs with the
 // most basic configuration.
 func TestBasicJobProcessing(t *testing.T) {
@@ -186,6 +188,45 @@ func TestFutureJobScheduling(t *testing.T) {
 
 	var ok bool
 	if _, ok = testFutureJobs.Load(jid); !ok {
+		t.Error(err)
+	}
+}
+
+func TestCron(t *testing.T) {
+	const cron = "* * * * * *"
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	var done = make(chan bool)
+	h := handler.New(func(ctx context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	h.WithOptions(
+		handler.Deadline(500*time.Millisecond),
+		handler.Concurrency(1),
+	)
+
+	err = nq.StartCron(ctx, cron, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// allow time for listener to start
+	time.Sleep(5 * time.Millisecond)
+
+	select {
+	case <-time.After(1 * time.Second):
+		err = errPeriodicTimeout
+	case <-done:
+	}
+
+	if err != nil {
 		t.Error(err)
 	}
 }
