@@ -3,11 +3,16 @@ package jobs
 import (
 	"crypto/md5" // nolint: gosec
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/guregu/null"
+)
+
+var (
+	ErrJobTimeout = errors.New("timed out waiting for job(s)")
 )
 
 const (
