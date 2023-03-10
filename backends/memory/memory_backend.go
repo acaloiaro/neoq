@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -16,7 +17,6 @@ import (
 	"github.com/guregu/null"
 	"github.com/iancoleman/strcase"                          // TODO factor out
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor" // TODO factor out
-	"github.com/pkg/errors"
 	"github.com/robfig/cron"
 	"golang.org/x/exp/slog"
 )
@@ -226,6 +226,10 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 				}
 
 				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+
 					m.logger.Error("job failed", err, "job_id", job.ID)
 					runAfter := internal.CalculateBackoff(job.Retries)
 					job.RunAfter = runAfter
@@ -277,8 +281,7 @@ func (m *MemBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 }
 
 func (m *MemBackend) handleJob(ctx context.Context, job *jobs.Job, h handler.Handler) (err error) {
-	ctxv := handler.CtxVars{Job: job}
-	hctx := handler.WithContext(ctx, ctxv)
+	ctx = handler.WithJobContext(ctx, job)
 
 	// check if the job is being retried and increment retry count accordingly
 	if job.Status != internal.JobStatusNew {
@@ -286,7 +289,7 @@ func (m *MemBackend) handleJob(ctx context.Context, job *jobs.Job, h handler.Han
 	}
 
 	// execute the queue handler of this job
-	err = handler.Exec(hctx, h)
+	err = handler.Exec(ctx, h)
 	if err != nil {
 		job.Error = null.StringFrom(err.Error())
 	}

@@ -51,7 +51,10 @@ const (
 	setIdleInTxSessionTimeout = `SET idle_in_transaction_session_timeout = 0`
 )
 
+type contextKey struct{}
+
 var (
+	txCtxVarKey               contextKey
 	ErrCnxString              = errors.New("invalid connecton string: see documentation for valid connection strings")
 	ErrDuplicateJobID         = errors.New("duplicate job id")
 	ErrNoQueue                = errors.New("no queue specified")
@@ -168,16 +171,14 @@ func WithTransactionTimeout(txTimeout int) config.Option {
 
 // txFromContext gets the transaction from a context, if the transaction is already set
 func txFromContext(ctx context.Context) (t pgx.Tx, err error) {
-	if v, ok := ctx.Value(handler.CtxVarsKey).(handler.CtxVars); ok {
-		var tx pgx.Tx
-		var ok bool
-		if tx, ok = v.Tx.(pgx.Tx); !ok {
-			return nil, ErrNoTransactionInContext
-		}
-		return tx, nil
+	var ok bool
+	if t, ok = ctx.Value(txCtxVarKey).(pgx.Tx); ok {
+		return
 	}
 
-	return nil, ErrNoTransactionInContext
+	err = ErrNoTransactionInContext
+
+	return
 }
 
 // initializeDB initializes the tables, types, and indices necessary to operate Neoq
@@ -538,7 +539,11 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 		_, err = tx.Exec(ctx, qstr, time.Now(), errMsg, status, job.ID)
 	}
 
-	if err == nil && time.Until(runAfter) > 0 {
+	if err != nil {
+		return
+	}
+
+	if time.Until(runAfter) > 0 {
 		p.mu.Lock()
 		p.futureJobs[job.ID] = runAfter
 		p.mu.Unlock()
@@ -733,6 +738,7 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 // 1. handleJob first creates a transactions inside of which a row lock is acquired for the job to be processed.
 // 2. handleJob secondly calls the handler on the job, and finally updates the job's status
 func (p *PgBackend) handleJob(ctx context.Context, jobID int64, h handler.Handler) (err error) {
+	var job *jobs.Job
 	var tx pgx.Tx
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
@@ -746,15 +752,13 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID int64, h handler.Handle
 	}
 	defer func(ctx context.Context) { _ = tx.Rollback(ctx) }(ctx) // rollback has no effect if the transaction has been committed
 
-	ctxv := handler.CtxVars{Tx: tx}
-	var job *jobs.Job
 	job, err = p.getPendingJob(ctx, tx, jobID)
 	if err != nil {
 		return
 	}
 
-	ctxv.Job = job
-	ctx = handler.WithContext(ctx, ctxv)
+	ctx = handler.WithJobContext(ctx, job)
+	ctx = context.WithValue(ctx, txCtxVarKey, tx)
 
 	// check if the job is being retried and increment retry count accordingly
 	if job.Status != internal.JobStatusNew {

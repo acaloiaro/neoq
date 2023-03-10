@@ -17,10 +17,9 @@ const (
 type contextKey struct{}
 
 var (
-	CtxVarsKey           contextKey
-	ErrContextHasNoJob   = errors.New("context has no Job")
-	ErrNoHandlerForQueue = errors.New("no handler for queue")
-	// TODO this error is here because cyclic imports with neoq
+	JobCtxVarKey           contextKey
+	ErrContextHasNoJob     = errors.New("context has no Job")
+	ErrNoHandlerForQueue   = errors.New("no handler for queue")
 	ErrNoProcessorForQueue = errors.New("no processor configured for queue")
 )
 
@@ -33,16 +32,6 @@ type Handler struct {
 	Concurrency   int
 	Deadline      time.Duration
 	QueueCapacity int64
-}
-
-// CtxVars are variables passed to every Handler context
-type CtxVars struct {
-	Job *jobs.Job
-	// this is a bit hacky. Tx here contains a pgx.Tx for PgBackend, but because we're in the handlers package, and we don't
-	// want all neoq users to have pgx as a transitive dependency, we store Tx as any, and coerce it to a pgx.Tx inside
-	// the postgres backend
-	// TODO redesign HandlerCtxVars so it doesn't need to include a pgx.Tx
-	Tx any
 }
 
 // Option is function that sets optional configuration for Handlers
@@ -101,9 +90,9 @@ func New(f Func, opts ...Option) (h Handler) {
 	return
 }
 
-// WithContext creates a new context with the job and transaction set
-func WithContext(ctx context.Context, v CtxVars) context.Context {
-	return context.WithValue(ctx, CtxVarsKey, v)
+// WithJobContext creates a new context with the Job set
+func WithJobContext(ctx context.Context, j *jobs.Job) context.Context {
+	return context.WithValue(ctx, JobCtxVarKey, j)
 }
 
 // Exec executes handler functions with a concrete time deadline
@@ -140,9 +129,10 @@ func Exec(ctx context.Context, handler Handler) (err error) {
 }
 
 // JobFromContext fetches the job from a context if the job context variable is already set
-func JobFromContext(ctx context.Context) (*jobs.Job, error) {
-	if v, ok := ctx.Value(CtxVarsKey).(CtxVars); ok {
-		return v.Job, nil
+func JobFromContext(ctx context.Context) (j *jobs.Job, err error) {
+	var ok bool
+	if j, ok = ctx.Value(JobCtxVarKey).(*jobs.Job); ok {
+		return
 	}
 
 	return nil, ErrContextHasNoJob

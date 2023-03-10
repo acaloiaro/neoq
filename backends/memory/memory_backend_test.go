@@ -66,7 +66,7 @@ func TestBasicJobProcessing(t *testing.T) {
 	for {
 		select {
 		case <-timeoutTimer:
-			err = errors.New("timed out waiting for job(s)")
+			err = jobs.ErrJobTimeout
 		case <-done:
 			doneCnt++
 		}
