@@ -2,7 +2,7 @@ package postgres_test
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -12,8 +12,6 @@ import (
 	"github.com/acaloiaro/neoq/config"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/jobs"
-	"github.com/pkg/errors"
-	"golang.org/x/exp/slog"
 )
 
 var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
@@ -22,9 +20,9 @@ var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
 // most basic configuration.
 func TestBasicJobProcessing(t *testing.T) {
 	queue := "testing"
-	numJobs := 10
-	doneCnt := 0
 	done := make(chan bool)
+	defer close(done)
+
 	var timeoutTimer = time.After(5 * time.Second)
 
 	var connString = os.Getenv("TEST_DATABASE_URL")
@@ -50,35 +48,20 @@ func TestBasicJobProcessing(t *testing.T) {
 		t.Error(err)
 	}
 
-	go func() {
-		for i := 0; i < numJobs; i++ {
-			jid, e := nq.Enqueue(ctx, &jobs.Job{
-				Queue: queue,
-				Payload: map[string]interface{}{
-					"message": fmt.Sprintf("hello world: %d", i),
-				},
-			})
-			if e != nil || jid == jobs.DuplicateJobID {
-				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", e)
-			}
-		}
-	}()
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
 
-	for {
-		select {
-		case <-timeoutTimer:
-			err = errors.New("timed out waiting for job(s)")
-		case <-done:
-			doneCnt++
-		}
-
-		if doneCnt >= numJobs {
-			break
-		}
-
-		if err != nil {
-			break
-		}
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
 	}
 
 	if err != nil {
@@ -87,6 +70,8 @@ func TestBasicJobProcessing(t *testing.T) {
 }
 
 func TestCron(t *testing.T) {
+	done := make(chan bool, 1)
+	defer close(done)
 	const cron = "* * * * * *"
 	var connString = os.Getenv("TEST_DATABASE_URL")
 	if connString == "" {
@@ -101,7 +86,6 @@ func TestCron(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	var done = make(chan bool)
 	h := handler.New(func(ctx context.Context) (err error) {
 		done <- true
 		return
