@@ -2,17 +2,11 @@ package neoq
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/acaloiaro/neoq/backends/memory"
 	"github.com/acaloiaro/neoq/config"
 	"github.com/acaloiaro/neoq/types"
-)
-
-var (
-	ErrConnectionStringRequired = errors.New("a connection string is required for this backend. See [config.WithConnectionString]")
-	ErrNoBackendSpecified       = errors.New("please specify a backend by using [config.WithBackend]")
 )
 
 // New creates a new backend instance for job processing.
