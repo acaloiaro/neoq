@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/acaloiaro/neoq/backends/postgres"
 	"github.com/acaloiaro/neoq/config"
 	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
 )
 
@@ -75,7 +77,6 @@ func TestBasicJobMultipleQueue(t *testing.T) {
 	const queue2 = "testing2"
 	done := make(chan bool)
 	doneCnt := 0
-	defer close(done)
 
 	var timeoutTimer = time.After(5 * time.Second)
 
@@ -115,7 +116,7 @@ func TestBasicJobMultipleQueue(t *testing.T) {
 	jid, e := nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
-			"message": "hello world",
+			"message": fmt.Sprintf("hello world: %d", internal.RandInt(10000000000)),
 		},
 	})
 	if e != nil || jid == jobs.DuplicateJobID {
@@ -125,7 +126,7 @@ func TestBasicJobMultipleQueue(t *testing.T) {
 	jid2, e := nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue2,
 		Payload: map[string]interface{}{
-			"message": "hello world",
+			"message": fmt.Sprintf("hello world: %d", internal.RandInt(10000000000)),
 		},
 	})
 	if e != nil || jid2 == jobs.DuplicateJobID {
@@ -146,7 +147,6 @@ results_loop:
 		}
 	}
 
-	time.Sleep(time.Second)
 	if err != nil {
 		t.Error(err)
 	}

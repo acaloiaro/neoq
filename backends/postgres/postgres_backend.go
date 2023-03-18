@@ -573,12 +573,18 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 func (p *PgBackend) start(ctx context.Context, queue string) (err error) {
 	var h handler.Handler
 	var ok bool
+
 	if h, ok = p.handlers[queue]; !ok {
 		return fmt.Errorf("%w: %s", handler.ErrNoHandlerForQueue, queue)
 	}
 
-	listenJobChan := p.listen(ctx, queue)        // listen for 'new' jobs
+	listenJobChan, ready := p.listen(ctx, queue) // listen for 'new' jobs
+	defer close(ready)
+
 	pendingJobsChan := p.pendingJobs(ctx, queue) // process overdue jobs *at startup*
+
+	// wait for the listener to connect and be ready to listen
+	<-ready
 
 	// process all future jobs and retries
 	go func() { p.scheduleFutureJobs(ctx, queue) }()
@@ -801,59 +807,56 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID int64, h handler.Handle
 // TODO: There is currently no handling of listener disconnects in PgBackend.
 // This will lead to jobs not getting processed until the worker is restarted.
 // Implement disconnect handling.
-func (p *PgBackend) listen(ctx context.Context, queue string) (c chan int64) {
+func (p *PgBackend) listen(ctx context.Context, queue string) (c chan int64, ready chan bool) {
 	c = make(chan int64)
+	ready = make(chan bool)
 
 	go func(ctx context.Context) {
+		conn, err := p.pool.Acquire(ctx)
+		if err != nil {
+			p.logger.Error("unable to acquire new listener connnection", err)
+			return
+		}
+		defer p.release(ctx, conn, queue)
+
+		// set this connection's idle in transaction timeout to infinite so it is not intermittently disconnected
+		_, err = conn.Exec(ctx, fmt.Sprintf("SET idle_in_transaction_session_timeout = '0'; LISTEN %s", queue))
+		if err != nil {
+			err = fmt.Errorf("unable to configure listener connection: %w", err)
+			p.logger.Error("unable to configure listener connection", err)
+			return
+		}
+
+		// notify start() that we're ready to listen for jobs
+		ready <- true
+
 		for {
-			conn, err := p.pool.Acquire(ctx)
-			if err != nil {
-				p.logger.Error("unable to acquire new connnection", err)
-				return
-			}
-
-			// set this connection's idle in transaction timeout to infinite so it is not intermittently disconnected
-			_, err = conn.Exec(ctx, fmt.Sprintf("SET idle_in_transaction_session_timeout = '0'; LISTEN %s", queue))
-			if err != nil {
-				err = fmt.Errorf("unable to configure listener connection: %w", err)
-				p.logger.Error("unable to configure listener connection", err)
-				time.Sleep(time.Second) // don't hammer the db
-				p.release(ctx, conn, queue)
-				continue
-			}
-
 			notification, waitErr := conn.Conn().WaitForNotification(ctx)
 			if waitErr != nil {
 				if errors.Is(waitErr, context.Canceled) {
-					p.release(ctx, conn, queue)
 					return
 				}
 
 				p.logger.Error("failed to wait for notification", waitErr)
-				p.release(ctx, conn, queue)
 				continue
 			}
 
 			var jobID int64
 			if jobID, err = strconv.ParseInt(notification.Payload, 0, 64); err != nil {
 				p.logger.Error("unable to fetch job", err)
-				p.release(ctx, conn, queue)
 				continue
 			}
 
 			// check if Shutdown() has been called
 			if jobID == shutdownJobID {
-				p.release(ctx, conn, queue)
 				return
 			}
 
 			c <- jobID
-
-			p.release(ctx, conn, queue)
 		}
 	}(ctx)
 
-	return c
+	return c, ready
 }
 
 func (p *PgBackend) release(ctx context.Context, conn *pgxpool.Conn, queue string) {
