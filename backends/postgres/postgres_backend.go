@@ -504,13 +504,20 @@ func (p *PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *jobs.Job,
 }
 
 // updateJob updates the status of jobs with: status, run time, error messages, and retries
+//
 // if the retry count exceeds the maximum number of retries for the job, move the job to the dead jobs queue
 //
-// if `tx`'s underlying connection dies, it results in this function throwing an error and job status inaccurately
-// reflecting the status of the job and its number of retries.
-// TODO: Handle dropped connections when updating job status in PgBackend
-// e.g. acquiring a new connection in the event of connection failure
-// nolint: cyclop
+// if `tx`'s underlying connection dies while updating job status, the transaction will fail, and the job's original
+// status will be reflecting in the database.
+//
+// The implication of this is that:
+// - the job's 'error' field will not reflect any errors the occurred in the handler
+// - the job's retry count is not incremented
+// - the job's run time will remain its original value
+// - the job has its original 'status'
+//
+// ultimately, this means that any time a database connection is lost while updating job status, then the job will be
+// processed at least one more time.
 func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 	status := internal.JobStatusProcessed
 	errMsg := ""
@@ -782,8 +789,9 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID int64, h handler.Handle
 
 	err = tx.Commit(ctx)
 	if err != nil {
-		p.logger.Error("unable to commit job transaction. retrying this job may dupliate work", err, "job_id", job.ID)
-		return fmt.Errorf("unable to commit job transaction. retrying this job may dupliate work: %w", err)
+		errMsg := "unable to commit job transaction. retrying this job may dupliate work:"
+		p.logger.Error(errMsg, err, "job_id", job.ID)
+		return fmt.Errorf("%s %w", errMsg, err)
 	}
 
 	return nil
