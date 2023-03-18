@@ -86,7 +86,7 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID int64, e
 	}
 
 	if job.Queue == "" {
-		err = errors.New("this job does not specify a Queue. Please specify a queue")
+		err = jobs.ErrNoQueueSpecified
 
 		return
 	}
@@ -264,7 +264,7 @@ func (m *MemBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 						queueChan = qc.(chan *jobs.Job)
 						queueChan <- j
 					} else {
-						m.logger.Error(fmt.Sprintf("no queue processor for queue '%s'", queue), errors.New("no queue processor configured"))
+						m.logger.Error(fmt.Sprintf("no queue processor for queue '%s'", queue), handler.ErrNoHandlerForQueue)
 					}
 				}(job)
 			}

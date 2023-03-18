@@ -20,7 +20,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WITH_V: true
-          DEFAULT_BUMP: patch
+          DEFAULT_BUMP: minor
       -
         name: Set up Go
         uses: actions/setup-go@v3

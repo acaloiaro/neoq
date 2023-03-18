@@ -19,7 +19,7 @@ var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
 // TestBasicJobProcessing tests that the postgres backend is able to process the most basic jobs with the
 // most basic configuration.
 func TestBasicJobProcessing(t *testing.T) {
-	queue := "testing"
+	const queue = "testing"
 	done := make(chan bool)
 	defer close(done)
 
@@ -64,6 +64,89 @@ func TestBasicJobProcessing(t *testing.T) {
 	case <-done:
 	}
 
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+// TestBasicJobMultipleQueue tests that the postgres backend is able to process jobs on multiple queues
+func TestBasicJobMultipleQueue(t *testing.T) {
+	const queue = "testing"
+	const queue2 = "testing2"
+	done := make(chan bool)
+	doneCnt := 0
+	defer close(done)
+
+	var timeoutTimer = time.After(5 * time.Second)
+
+	var connString = os.Getenv("TEST_DATABASE_URL")
+	if connString == "" {
+		t.Skip("Skipping: TEST_DATABASE_URL not set")
+		return
+	}
+
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), config.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(func(_ context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	h2 := handler.New(func(_ context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	err = nq.Start(ctx, queue, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = nq.Start(ctx, queue2, h2)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+	jid2, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue2,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+	})
+	if e != nil || jid2 == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+results_loop:
+	for {
+		select {
+		case <-timeoutTimer:
+			err = jobs.ErrJobTimeout
+			break results_loop
+		case <-done:
+			doneCnt++
+			if doneCnt == 2 {
+				break results_loop
+			}
+		}
+	}
+
+	time.Sleep(time.Second)
 	if err != nil {
 		t.Error(err)
 	}
