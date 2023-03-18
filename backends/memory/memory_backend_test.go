@@ -230,3 +230,62 @@ func TestCron(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestFutureMultipleHandlerOnSameQueue(t *testing.T) {
+	ctx := context.Background()
+	var done = make(chan bool, 1)
+	doneCnt := 0
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h1 := handler.New(func(ctx context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	h2 := handler.New(func(ctx context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	if err := nq.Start(ctx, queue, h1); err != nil {
+		t.Fatal(err)
+	}
+	if err := nq.Start(ctx, queue, h2); err != nil {
+		t.Fatal(err)
+	}
+
+	jid, err := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello multie queue world",
+		},
+	})
+	if err != nil || jid == jobs.DuplicateJobID {
+		err = fmt.Errorf("job was not enqueued. either it was duplicate or this error caused it: %w", err)
+		t.Error(err)
+	}
+
+	timeout := time.After(2 * time.Second)
+
+result_loop:
+	for {
+		select {
+		case <-timeout:
+			err = errors.New("timeout")
+			break result_loop
+		case <-done:
+			doneCnt++
+		}
+		if doneCnt == 2 {
+			break result_loop
+		}
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
+}
