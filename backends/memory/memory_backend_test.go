@@ -193,7 +193,7 @@ func TestFutureJobScheduling(t *testing.T) {
 }
 
 func TestCron(t *testing.T) {
-	const cron = "* * * * * *"
+	const cronSpec = "* * * * * *"
 	ctx := context.TODO()
 	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 	if err != nil {
@@ -212,7 +212,7 @@ func TestCron(t *testing.T) {
 		handler.Concurrency(1),
 	)
 
-	err = nq.StartCron(ctx, cron, h)
+	err = nq.StartCron(ctx, cronSpec, h)
 	if err != nil {
 		t.Error(err)
 	}

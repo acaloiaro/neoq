@@ -58,7 +58,7 @@ test-watch:
 .PHONY: lint
 lint:
 	@clear
-	@golangci-lint run .
+	@golangci-lint run
 
 .PHONY: lint-watch
 lint-watch: install-reflex

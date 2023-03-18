@@ -12,7 +12,8 @@ import (
 )
 
 var (
-	ErrJobTimeout = errors.New("timed out waiting for job(s)")
+	ErrJobTimeout       = errors.New("timed out waiting for job(s)")
+	ErrNoQueueSpecified = errors.New("this job does not specify a queue. please specify a queue")
 )
 
 const (
