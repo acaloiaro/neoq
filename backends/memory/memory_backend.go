@@ -276,7 +276,7 @@ func (m *MemBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 }
 
 func (m *MemBackend) handleJob(ctx context.Context, job *jobs.Job, h handler.Handler) (retries int, err error) {
-	ctx = handler.WithJobContext(ctx, job)
+	ctx = withJobContext(ctx, job)
 
 	// check if the job is being retried and increment retry count accordingly
 	if job.Status != internal.JobStatusNew {
@@ -302,4 +302,9 @@ func (m *MemBackend) removeFutureJob(jobID int64) {
 		m.fingerprints.Delete(job.Fingerprint)
 		m.futureJobs.Delete(job.ID)
 	}
+}
+
+// withJobContext creates a new context with the Job set
+func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
+	return context.WithValue(ctx, internal.JobCtxVarKey, j)
 }

@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
 )
 
@@ -14,10 +15,7 @@ const (
 	DefaultHandlerDeadline = 30 * time.Second
 )
 
-type contextKey struct{}
-
 var (
-	JobCtxVarKey           contextKey
 	ErrContextHasNoJob     = errors.New("context has no Job")
 	ErrNoHandlerForQueue   = errors.New("no handler for queue")
 	ErrNoProcessorForQueue = errors.New("no processor configured for queue")
@@ -91,11 +89,6 @@ func New(f Func, opts ...Option) (h Handler) {
 	return
 }
 
-// WithJobContext creates a new context with the Job set
-func WithJobContext(ctx context.Context, j *jobs.Job) context.Context {
-	return context.WithValue(ctx, JobCtxVarKey, j)
-}
-
 // Exec executes handler functions with a concrete time deadline
 func Exec(ctx context.Context, handler Handler) (err error) {
 	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(handler.Deadline))
@@ -132,7 +125,7 @@ func Exec(ctx context.Context, handler Handler) (err error) {
 // JobFromContext fetches the job from a context if the job context variable is already set
 func JobFromContext(ctx context.Context) (j *jobs.Job, err error) {
 	var ok bool
-	if j, ok = ctx.Value(JobCtxVarKey).(*jobs.Job); ok {
+	if j, ok = ctx.Value(internal.JobCtxVarKey).(*jobs.Job); ok {
 		return
 	}
 

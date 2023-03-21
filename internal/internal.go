@@ -9,11 +9,15 @@ import (
 	"time"
 )
 
+type contextKey struct{}
+
 const (
 	JobStatusNew       = "new"
 	JobStatusProcessed = "processed"
 	JobStatusFailed    = "failed"
 )
+
+var JobCtxVarKey contextKey
 
 // CalculateBackoff calculates the number of seconds to back off before the next retry
 // this formula is unabashedly taken from Sidekiq because it is good.

@@ -768,7 +768,7 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID int64, h handler.Handle
 		return
 	}
 
-	ctx = handler.WithJobContext(ctx, job)
+	ctx = withJobContext(ctx, job)
 	ctx = context.WithValue(ctx, txCtxVarKey, tx)
 
 	// check if the job is being retried and increment retry count accordingly
@@ -890,4 +890,9 @@ func (p *PgBackend) getPendingJob(ctx context.Context, tx pgx.Tx, jobID int64) (
 func (p *PgBackend) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queue string) (jobID int64, err error) {
 	err = conn.QueryRow(ctx, PendingJobIDQuery, queue).Scan(&jobID)
 	return
+}
+
+// withJobContext creates a new context with the Job set
+func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
+	return context.WithValue(ctx, internal.JobCtxVarKey, j)
 }
