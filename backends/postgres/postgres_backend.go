@@ -79,7 +79,7 @@ type PgBackend struct {
 //
 // If the database does not yet exist, Neoq will attempt to create the database and related tables by default.
 //
-// Backend requires that one of the [config.ConfigOption] is [config.WithConnectionString]
+// Backend requires that one of the [config.ConfigOption] is [WithConnectionString]
 //
 // Connection strings may be a URL or DSN-style connection strings. The connection string supports multiple
 // options detailed below.
@@ -156,6 +156,13 @@ func Backend(ctx context.Context, opts ...config.Option) (pb types.Backend, err 
 	pb = p
 
 	return pb, nil
+}
+
+// WithConnectionString configures neoq postgres backend to use the specified connection string when connecting to a backend
+func WithConnectionString(connectionString string) config.Option {
+	return func(c *config.Config) {
+		c.ConnectionString = connectionString
+	}
 }
 
 // WithTransactionTimeout sets the time that PgBackend's transactions may be idle before its underlying connection is

@@ -78,7 +78,7 @@ nq.Enqueue(ctx, &jobs.Job{
 ctx := context.Background()
 nq, _ := neoq.New(ctx,
   neoq.WithBackend(postgres.Backend),
-  config.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"),
+  postgres.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"),
 )
 
 nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {

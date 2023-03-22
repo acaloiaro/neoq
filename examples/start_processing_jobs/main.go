@@ -6,7 +6,6 @@ import (
 
 	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/backends/postgres"
-	"github.com/acaloiaro/neoq/config"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/jobs"
 )
@@ -16,7 +15,7 @@ func main() {
 	const queue = "foobar"
 	ctx := context.Background()
 
-	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), config.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"))
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"))
 	if err != nil {
 		log.Fatalf("error initializing postgres backend: %v", err)
 	}
