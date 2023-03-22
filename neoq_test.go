@@ -105,7 +105,7 @@ func TestStart(t *testing.T) {
 		return
 	})
 	h.WithOptions(
-		handler.Deadline(500*time.Millisecond),
+		handler.JobTimeout(500*time.Millisecond),
 		handler.Concurrency(1),
 	)
 
@@ -125,7 +125,7 @@ func TestStart(t *testing.T) {
 				"message": fmt.Sprintf("hello world: %d", i),
 			},
 		})
-		if err != nil || jid == -1 {
+		if err != nil || jid == jobs.DuplicateJobID {
 			t.Fatal("job was not enqueued. either it was duplicate or this error caused it:", err)
 		}
 	}
@@ -169,7 +169,7 @@ func TestStartCron(t *testing.T) {
 	})
 
 	h.WithOptions(
-		handler.Deadline(500*time.Millisecond),
+		handler.JobTimeout(500*time.Millisecond),
 		handler.Concurrency(1),
 	)
 

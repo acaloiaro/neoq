@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	DefaultHandlerDeadline = 30 * time.Second
+	DefaultHandlerTimeout = 30 * time.Second
 )
 
 var (
@@ -25,7 +25,7 @@ type Func func(ctx context.Context) error
 type Handler struct {
 	Handle        Func
 	Concurrency   int
-	Deadline      time.Duration
+	JobTimeout    time.Duration
 	QueueCapacity int64
 }
 
@@ -39,12 +39,12 @@ func (h *Handler) WithOptions(opts ...Option) {
 	}
 }
 
-// Deadline configures handlers with a time deadline for every executed job
-// The deadline is the amount of time that can be spent executing the handler's Func
-// when a deadline is exceeded, the job is failed and enters its retry phase
-func Deadline(d time.Duration) Option {
+// JobTimeout configures handlers with a time deadline for every executed job
+// The timeout is the amount of time that can be spent executing the handler's Func
+// when a timeout is exceeded, the job fails and enters its retry phase
+func JobTimeout(d time.Duration) Option {
 	return func(h *Handler) {
-		h.Deadline = d
+		h.JobTimeout = d
 	}
 }
 
@@ -72,22 +72,22 @@ func New(f Func, opts ...Option) (h Handler) {
 
 	h.WithOptions(opts...)
 
-	// default to running one fewer threads than CPUs
+	// default to running on as many goroutines as there are CPUs
 	if h.Concurrency == 0 {
-		Concurrency(runtime.NumCPU() - 1)(&h)
+		Concurrency(runtime.NumCPU())(&h)
 	}
 
-	// always set a job deadline if none is set
-	if h.Deadline == 0 {
-		Deadline(DefaultHandlerDeadline)(&h)
+	// always set a job timeout if none is set
+	if h.JobTimeout == 0 {
+		JobTimeout(DefaultHandlerTimeout)(&h)
 	}
 
 	return
 }
 
-// Exec executes handler functions with a concrete time deadline
+// Exec executes handler functions with a concrete timeout
 func Exec(ctx context.Context, handler Handler) (err error) {
-	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(handler.Deadline))
+	timeoutCtx, cancel := context.WithTimeout(ctx, handler.JobTimeout)
 	defer cancel()
 
 	var errCh = make(chan error, 1)
@@ -104,10 +104,10 @@ func Exec(ctx context.Context, handler Handler) (err error) {
 			err = fmt.Errorf("job failed to process: %w", err)
 		}
 
-	case <-deadlineCtx.Done():
-		ctxErr := deadlineCtx.Err()
+	case <-timeoutCtx.Done():
+		ctxErr := timeoutCtx.Err()
 		if errors.Is(ctxErr, context.DeadlineExceeded) {
-			err = fmt.Errorf("job exceeded its %s deadline: %w", handler.Deadline, ctxErr)
+			err = fmt.Errorf("job exceeded its %s timeout: %w", handler.JobTimeout, ctxErr)
 		} else if errors.Is(ctxErr, context.Canceled) {
 			err = ctxErr
 		} else {

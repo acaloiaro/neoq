@@ -54,7 +54,7 @@ func main() {
 
 	<-done
 
-	// job's status will be 'failed' and 'error' will be 'job exceeded its 10ms deadline'
-	// until either the job's Sleep statement is decreased/removed or the handler's deadline is increased
+	// job's status will be 'failed' and 'error' will be 'job exceeded its 10ms timeout'
+	// until either the job's Sleep statement is decreased/removed or the handler's timeout is increased
 	// this job will continue to fail and ultimately land on the dead jobs queue
 }

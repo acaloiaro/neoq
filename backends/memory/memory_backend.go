@@ -67,7 +67,7 @@ func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend,
 }
 
 // Enqueue queues jobs to be executed asynchronously
-func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID int64, err error) {
+func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
 	var queueChan chan *jobs.Job
 	var qc any
 	var ok bool
@@ -107,7 +107,7 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID int64, e
 	m.mu.Unlock()
 
 	job.ID = m.jobCount
-	jobID = m.jobCount
+	jobID = fmt.Sprint(m.jobCount)
 
 	if job.RunAfter.Equal(now) {
 		queueChan <- job

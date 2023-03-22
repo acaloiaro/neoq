@@ -18,5 +18,11 @@ vendor/
 # Some tests require environment variables to be set
 .env
 
+# it's handy to have a docker-compose available during development
+docker-compose.yml
+
+.pre-commit-config.yaml
 
 dist/
+
+

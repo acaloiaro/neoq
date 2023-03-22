@@ -23,7 +23,7 @@ func main() {
 		return
 	})
 	h.WithOptions(
-		handler.Deadline(500*time.Millisecond),
+		handler.JobTimeout(500*time.Millisecond),
 		handler.Concurrency(1),
 	)
 
