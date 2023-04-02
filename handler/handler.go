@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"runtime"
 	"time"
-
-	"github.com/acaloiaro/neoq/jobs"
 )
 
 const (
