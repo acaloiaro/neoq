@@ -21,8 +21,8 @@ const (
 type Config struct {
 	BackendInitializer     BackendInitializer
 	ConnectionString       string        // a string containing connection details for the backend
-	FutureJobWindow        time.Duration // the window of time between now and RunAfter that goroutines are scheduled for future jobs
 	JobCheckInterval       time.Duration // the interval of time between checking for new future/retry jobs
+	FutureJobWindow        time.Duration // time duration between current time and job.RunAfter that goroutines schedule for future jobs
 	IdleTransactionTimeout int           // the number of milliseconds PgBackend transaction may idle before the connection is killed
 }
 

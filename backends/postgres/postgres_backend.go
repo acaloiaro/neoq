@@ -518,6 +518,7 @@ func (p *PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *jobs.Job,
 //
 // ultimately, this means that any time a database connection is lost while updating job status, then the job will be
 // processed at least one more time.
+// nolint: cyclop
 func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 	status := internal.JobStatusProcessed
 	errMsg := ""
@@ -528,7 +529,7 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 	}
 
 	var job *jobs.Job
-	if job, err = handler.JobFromContext(ctx); err != nil {
+	if job, err = jobs.FromContext(ctx); err != nil {
 		return fmt.Errorf("error getting job from context: %w", err)
 	}
 

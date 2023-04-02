@@ -47,7 +47,7 @@ Queue Handlers are simple Go functions that accept a `Context` parameter.
 ctx := context.Background()
 nq, _ := neoq.New(ctx)
 nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
-  j, _ := handler.JobFromContext(ctx)
+  j, _ := jobs.FromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
   return
 }))
@@ -82,7 +82,7 @@ nq, _ := neoq.New(ctx,
 )
 
 nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
-  j, _ := handler.JobFromContext(ctx)
+  j, _ := jobs.FromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
   return
 }))

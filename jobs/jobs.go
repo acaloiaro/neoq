@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"crypto/md5" // nolint: gosec
 	"encoding/json"
 	"errors"
@@ -8,10 +9,12 @@ import (
 	"io"
 	"time"
 
+	"github.com/acaloiaro/neoq/internal"
 	"github.com/guregu/null"
 )
 
 var (
+	ErrContextHasNoJob  = errors.New("context has no Job")
 	ErrJobTimeout       = errors.New("timed out waiting for job(s)")
 	ErrNoQueueSpecified = errors.New("this job does not specify a queue. please specify a queue")
 )
@@ -67,4 +70,14 @@ func FingerprintJob(j *Job) (err error) {
 	j.Fingerprint = fmt.Sprintf("%x", h.Sum(nil))
 
 	return
+}
+
+// FromContext fetches the job from a context if the job context variable is set
+func FromContext(ctx context.Context) (j *Job, err error) {
+	var ok bool
+	if j, ok = ctx.Value(internal.JobCtxVarKey).(*Job); ok {
+		return
+	}
+
+	return nil, ErrContextHasNoJob
 }
