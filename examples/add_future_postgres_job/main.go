@@ -7,7 +7,6 @@ import (
 
 	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/backends/postgres"
-	"github.com/acaloiaro/neoq/config"
 	"github.com/acaloiaro/neoq/jobs"
 )
 
@@ -15,8 +14,8 @@ func main() {
 	const queue = "foobar"
 	ctx := context.Background()
 	nq, err := neoq.New(ctx,
-		config.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"),
 		neoq.WithBackend(postgres.Backend),
+		postgres.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"),
 		postgres.WithTransactionTimeout(1000), // nolint: mnd, gomnd
 	)
 	if err != nil {

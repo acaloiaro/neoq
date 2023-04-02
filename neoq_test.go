@@ -12,7 +12,6 @@ import (
 
 	"github.com/acaloiaro/neoq/backends/memory"
 	"github.com/acaloiaro/neoq/backends/postgres"
-	"github.com/acaloiaro/neoq/config"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/testutils"
@@ -43,7 +42,7 @@ func ExampleNew_postgres() {
 		return
 	}
 
-	nq, err := New(ctx, WithBackend(postgres.Backend), config.WithConnectionString(pgURL))
+	nq, err := New(ctx, WithBackend(postgres.Backend), postgres.WithConnectionString(pgURL))
 	if err != nil {
 		fmt.Println("neoq's postgres backend failed to initialize:", err)
 		return
@@ -76,7 +75,7 @@ func ExampleWithBackend_postgres() {
 		return
 	}
 
-	nq, err := New(ctx, WithBackend(postgres.Backend), config.WithConnectionString(pgURL))
+	nq, err := New(ctx, WithBackend(postgres.Backend), postgres.WithConnectionString(pgURL))
 	if err != nil {
 		fmt.Println("initializing a new Neoq with no params should not return an error:", err)
 		return

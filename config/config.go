@@ -13,9 +13,8 @@ const (
 	// schdule the job for execution.
 	// E.g. right now is 16:00 and a job's RunAfter is 16:30 of the same date. This job will get a dedicated goroutine to
 	// wait until the job's RunAfter, scheduling the job to be run exactly at RunAfter
-	DefaultFutureJobWindow    = 30 * time.Second
-	DefaultJobCheckInterval   = 5 * time.Second
-	DefaultTransactionTimeout = time.Minute
+	DefaultFutureJobWindow  = 30 * time.Second
+	DefaultJobCheckInterval = 5 * time.Second
 )
 
 type Config struct {
@@ -35,13 +34,6 @@ func New() *Config {
 		FutureJobWindow:        DefaultFutureJobWindow,
 		JobCheckInterval:       DefaultJobCheckInterval,
 		IdleTransactionTimeout: DefaultIdleTxTimeout,
-	}
-}
-
-// WithConnectionString configures neoq to use the specified connection string when connecting to a backend
-func WithConnectionString(connectionString string) Option {
-	return func(c *Config) {
-		c.ConnectionString = connectionString
 	}
 }
 
