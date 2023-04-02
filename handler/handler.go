@@ -30,7 +30,6 @@ type Handler struct {
 	Concurrency   int
 	Deadline      time.Duration
 	QueueCapacity int64
-	JobsChannel   chan *jobs.Job
 }
 
 // Option is function that sets optional configuration for Handlers
