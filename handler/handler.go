@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
 )
 
@@ -119,14 +118,4 @@ func Exec(ctx context.Context, handler Handler) (err error) {
 	}
 
 	return
-}
-
-// JobFromContext fetches the job from a context if the job context variable is already set
-func JobFromContext(ctx context.Context) (j *jobs.Job, err error) {
-	var ok bool
-	if j, ok = ctx.Value(internal.JobCtxVarKey).(*jobs.Job); ok {
-		return
-	}
-
-	return nil, ErrContextHasNoJob
 }

@@ -31,7 +31,7 @@ func main() {
 	h := handler.New(func(ctx context.Context) (err error) {
 		var j *jobs.Job
 		time.Sleep(1 * time.Second)
-		j, err = handler.JobFromContext(ctx)
+		j, err = jobs.FromContext(ctx)
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
 		done <- true
 		return
