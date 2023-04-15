@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -55,11 +54,11 @@ type contextKey struct{}
 
 var (
 	txCtxVarKey                   contextKey
-	shutdownJobID                 int64 = -1  // job ID announced when triggering a shutdown
-	shutdownAnnouncementAllowance       = 100 // ms
-	ErrCnxString                        = errors.New("invalid connecton string: see documentation for valid connection strings")
-	ErrDuplicateJobID                   = errors.New("duplicate job id")
-	ErrNoTransactionInContext           = errors.New("context does not have a Tx set")
+	shutdownJobID                 = "-1" // job ID announced when triggering a shutdown
+	shutdownAnnouncementAllowance = 100  // ms
+	ErrCnxString                  = errors.New("invalid connecton string: see documentation for valid connection strings")
+	ErrDuplicateJobID             = errors.New("duplicate job id")
+	ErrNoTransactionInContext     = errors.New("context does not have a Tx set")
 )
 
 // PgBackend is a Postgres-based Neoq backend
@@ -70,7 +69,7 @@ type PgBackend struct {
 	cron        *cron.Cron
 	mu          *sync.Mutex // mutex to protect mutating state on a pgWorker
 	pool        *pgxpool.Pool
-	futureJobs  map[int64]time.Time        // map of future job IDs to their due time
+	futureJobs  map[string]time.Time       // map of future job IDs to their due time
 	handlers    map[string]handler.Handler // a map of queue names to queue handlers
 	cancelFuncs []context.CancelFunc       // A collection of cancel functions to be called upon Shutdown()
 }
@@ -104,7 +103,7 @@ func Backend(ctx context.Context, opts ...config.Option) (pb types.Backend, err 
 		mu:          &sync.Mutex{},
 		config:      config.New(),
 		handlers:    make(map[string]handler.Handler),
-		futureJobs:  make(map[int64]time.Time),
+		futureJobs:  make(map[string]time.Time),
 		logger:      slog.New(slog.NewTextHandler(os.Stdout)),
 		cron:        cron.New(),
 		cancelFuncs: []context.CancelFunc{},
@@ -321,7 +320,7 @@ func (p *PgBackend) initializeDB(ctx context.Context) (err error) {
 }
 
 // Enqueue adds jobs to the specified queue
-func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID int64, err error) {
+func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
@@ -359,6 +358,7 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID int64, er
 	if err != nil {
 		err = fmt.Errorf("error enqueuing job: %w", err)
 	}
+
 	if jobID == jobs.DuplicateJobID {
 		err = ErrDuplicateJobID
 		return
@@ -366,7 +366,7 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID int64, er
 
 	// notify listeners that a new job has arrived if it's not a future job
 	if job.RunAfter.Equal(now) {
-		_, err = tx.Exec(ctx, fmt.Sprintf("NOTIFY %s, '%d'", job.Queue, jobID))
+		_, err = tx.Exec(ctx, fmt.Sprintf("NOTIFY %s, '%s'", job.Queue, jobID))
 		if err != nil {
 			err = fmt.Errorf("error executing transaction: %w", err)
 		}
@@ -465,7 +465,7 @@ func (p *PgBackend) Shutdown(ctx context.Context) {
 //
 // Jobs that are not already fingerprinted are fingerprinted before being added
 // Duplicate jobs are not added to the queue. Any two unprocessed jobs with the same fingerprint are duplicates
-func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (jobID int64, err error) {
+func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (jobID string, err error) {
 	err = jobs.FingerprintJob(j)
 	if err != nil {
 		return
@@ -569,7 +569,7 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 
 	if time.Until(runAfter) > 0 {
 		p.mu.Lock()
-		p.futureJobs[job.ID] = runAfter
+		p.futureJobs[fmt.Sprint(job.ID)] = runAfter
 		p.mu.Unlock()
 	}
 
@@ -600,7 +600,7 @@ func (p *PgBackend) start(ctx context.Context, queue string) (err error) {
 	for i := 0; i < h.Concurrency; i++ {
 		go func() {
 			var err error
-			var jobID int64
+			var jobID string
 
 			for {
 				select {
@@ -630,7 +630,7 @@ func (p *PgBackend) start(ctx context.Context, queue string) (err error) {
 }
 
 // removeFutureJob removes a future job from the in-memory list of jobs that will execute in the future
-func (p *PgBackend) removeFutureJob(jobID int64) {
+func (p *PgBackend) removeFutureJob(jobID string) {
 	if _, ok := p.futureJobs[jobID]; ok {
 		p.mu.Lock()
 		delete(p.futureJobs, jobID)
@@ -647,7 +647,7 @@ func (p *PgBackend) initFutureJobs(ctx context.Context, queue string) (err error
 		return
 	}
 
-	var id int64
+	var id string
 	var runAfter time.Time
 	_, err = pgx.ForEachRow(rows, []any{&id, &runAfter}, func() error {
 		p.mu.Lock()
@@ -675,7 +675,7 @@ func (p *PgBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 			timeUntillRunAfter := time.Until(runAfter)
 			if timeUntillRunAfter <= p.config.FutureJobWindow {
 				p.removeFutureJob(jobID)
-				go func(jid int64) {
+				go func(jid string) {
 					scheduleCh := time.After(timeUntillRunAfter)
 					<-scheduleCh
 					p.announceJob(ctx, queue, jid)
@@ -695,7 +695,7 @@ func (p *PgBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 // announceJob announces jobs to queue listeners.
 //
 // Announced jobs are executed by the first worker to respond to the announcement.
-func (p *PgBackend) announceJob(ctx context.Context, queue string, jobID int64) {
+func (p *PgBackend) announceJob(ctx context.Context, queue, jobID string) {
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
 		return
@@ -712,7 +712,7 @@ func (p *PgBackend) announceJob(ctx context.Context, queue string, jobID int64) 
 	defer func(ctx context.Context) { _ = tx.Rollback(ctx) }(ctx)
 
 	// notify listeners that a job is ready to run
-	_, err = tx.Exec(ctx, fmt.Sprintf("NOTIFY %s, '%d'", queue, jobID))
+	_, err = tx.Exec(ctx, fmt.Sprintf("NOTIFY %s, '%s'", queue, jobID))
 	if err != nil {
 		return
 	}
@@ -723,8 +723,8 @@ func (p *PgBackend) announceJob(ctx context.Context, queue string, jobID int64) 
 	}
 }
 
-func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan int64) {
-	jobsCh = make(chan int64)
+func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan string) {
+	jobsCh = make(chan string)
 
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
@@ -756,7 +756,7 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 // it receives pending, periodic, and retry job ids asynchronously
 // 1. handleJob first creates a transactions inside of which a row lock is acquired for the job to be processed.
 // 2. handleJob secondly calls the handler on the job, and finally updates the job's status
-func (p *PgBackend) handleJob(ctx context.Context, jobID int64, h handler.Handler) (err error) {
+func (p *PgBackend) handleJob(ctx context.Context, jobID string, h handler.Handler) (err error) {
 	var job *jobs.Job
 	var tx pgx.Tx
 	conn, err := p.pool.Acquire(ctx)
@@ -815,8 +815,8 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID int64, h handler.Handle
 // TODO: There is currently no handling of listener disconnects in PgBackend.
 // This will lead to jobs not getting processed until the worker is restarted.
 // Implement disconnect handling.
-func (p *PgBackend) listen(ctx context.Context, queue string) (c chan int64, ready chan bool) {
-	c = make(chan int64)
+func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, ready chan bool) {
+	c = make(chan string)
 	ready = make(chan bool)
 
 	go func(ctx context.Context) {
@@ -849,18 +849,12 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan int64, rea
 				continue
 			}
 
-			var jobID int64
-			if jobID, err = strconv.ParseInt(notification.Payload, 0, 64); err != nil {
-				p.logger.Error("unable to fetch job", err)
-				continue
-			}
-
 			// check if Shutdown() has been called
-			if jobID == shutdownJobID {
+			if notification.Payload == shutdownJobID {
 				return
 			}
 
-			c <- jobID
+			c <- notification.Payload
 		}
 	}(ctx)
 
@@ -881,7 +875,7 @@ func (p *PgBackend) release(ctx context.Context, conn *pgxpool.Conn, queue strin
 	conn.Release()
 }
 
-func (p *PgBackend) getPendingJob(ctx context.Context, tx pgx.Tx, jobID int64) (job *jobs.Job, err error) {
+func (p *PgBackend) getPendingJob(ctx context.Context, tx pgx.Tx, jobID string) (job *jobs.Job, err error) {
 	row, err := tx.Query(ctx, PendingJobQuery, jobID)
 	if err != nil {
 		return
@@ -895,7 +889,7 @@ func (p *PgBackend) getPendingJob(ctx context.Context, tx pgx.Tx, jobID int64) (
 	return
 }
 
-func (p *PgBackend) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queue string) (jobID int64, err error) {
+func (p *PgBackend) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queue string) (jobID string, err error) {
 	err = conn.QueryRow(ctx, PendingJobIDQuery, queue).Scan(&jobID)
 	return
 }

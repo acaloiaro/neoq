@@ -15,7 +15,7 @@ import (
 //   - [pkg/github.com/acaloiaro/neoq/backends/postgres.PgBackend]
 type Backend interface {
 	// Enqueue queues jobs to be executed asynchronously
-	Enqueue(ctx context.Context, job *jobs.Job) (jobID int64, err error)
+	Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error)
 
 	// Start starts processing jobs with the specified queue and handler
 	Start(ctx context.Context, queue string, h handler.Handler) (err error)

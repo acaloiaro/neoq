@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -186,8 +187,9 @@ func TestFutureJobScheduling(t *testing.T) {
 		t.Error(err)
 	}
 
+	jobID, _ := strconv.ParseInt(jid, 0, 64)
 	var ok bool
-	if _, ok = testFutureJobs.Load(jid); !ok {
+	if _, ok = testFutureJobs.Load(jobID); !ok {
 		t.Error(err)
 	}
 }
@@ -208,7 +210,7 @@ func TestCron(t *testing.T) {
 	})
 
 	h.WithOptions(
-		handler.Deadline(500*time.Millisecond),
+		handler.JobTimeout(500*time.Millisecond),
 		handler.Concurrency(1),
 	)
 

@@ -10,19 +10,24 @@ Background job processing for Go
 
 # About
 
-Neoq is a background job framework for Go applications. Its purpose is to minimize the infrastructure necessary to run production applications. It does so by implementing queue durability with modular backends.
+Neoq is a queue-agnostic background job framework for Go.
 
-This allows application to use the same type of data store for both application data and backround job processing. At the moment an in-memory and Postgres backends are provided. However, the goal is to have backends for every major datastore: Postgres, Redis, MySQL, etc.
+Neoq job handlers are the same, whether queues are in-memory for development/testing, or Postgres, Redis, or a custom queue for production -- allowing queue infrastructure to change without code change.
 
-Neoq does not aim to be the _fastest_ background job processor. It aims to be _fast_, _reliable_, and demand a minimal infrastructure footprint.
+Developing/testing or don't need a durable queue? Use the in-memory queue.
+
+Running an application in production? Use Postgres.
+
+Have higher throughput demands in production? Use Redis.
+
+Neoq does not aim to be the _fastest_ background job processor. It aims to be _fast_, _reliable_, and demand a _minimal infrastructure footprint_.
 
 # What it does
 
-- **Background job Processing**: Neoq has an in-memory and Postgres backend out of the box. Users may supply their own without changing neoq directly.
+- **Multiple Backends**: In-memory, Postgres, Redis, or user-supplied custom backends.
 - **Retries**: Jobs may be retried a configurable number of times with exponential backoff and jitter to prevent thundering herds
-- **Job uniqueness**: jobs are fingerprinted based on their payload and status to prevent job duplication (multiple unprocessed jobs with the same payload cannot be queued)
-- **Deadlines**: Queue handlers can be configured with per-job time deadlines with millisecond accuracy
-- **Configurable transaction idle time**: Don't let your background worker transactions run away with db resources. By default, worker transactions may idle for 60 seconds.
+- **Job uniqueness**: jobs are fingerprinted based on their payload and status to prevent job duplication (multiple jobs with the same payload are not re-queued)
+- **Job Timeouts**: Queue handlers can be configured with per-job timeouts with millisecond accuracy
 - **Periodic Jobs**: Jobs can be scheduled periodically using standard cron syntax
 - **Future Jobs**: Jobs can be scheduled either for the future or immediate execution
 - **Concurrency**: Concurrency is configurable for every queue
@@ -62,6 +67,32 @@ Enqueuing jobs adds jobs to the specified queue to be processed asynchronously.
 ```go
 ctx := context.Background()
 nq, _ := neoq.New(ctx)
+nq.Enqueue(ctx, &jobs.Job{
+  Queue: "hello_world",
+  Payload: map[string]interface{}{
+    "message": "hello world",
+  },
+})
+```
+
+## Redis
+
+**Example**: Process jobs on the "hello_world" queue and add a job to it using the redis backend
+
+```go
+ctx := context.Background()
+nq, _ := neoq.New(ctx,
+  neoq.WithBackend(redis.Backend),
+  redis.WithAddr("localhost:6379"),
+  redis.WithPassword(""),
+)
+
+nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
+  j, _ := jobs.FromContext(ctx)
+  log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
+  return
+}))
+
 nq.Enqueue(ctx, &jobs.Job{
   Queue: "hello_world",
   Payload: map[string]interface{}{

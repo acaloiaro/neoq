@@ -174,7 +174,7 @@ func TestCron(t *testing.T) {
 	})
 
 	h.WithOptions(
-		handler.Deadline(500*time.Millisecond),
+		handler.JobTimeout(500*time.Millisecond),
 		handler.Concurrency(1),
 	)
 

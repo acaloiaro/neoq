@@ -17,12 +17,20 @@ const (
 	DefaultJobCheckInterval = 5 * time.Second
 )
 
+// Config configures neoq and its backends
+//
+// This configuration struct includes options for all backends. As such, some of its options are not implicable to all
+// backends. [BackendConcurrency], for example, is only used by the redis backend. Other backends manage concurrency on a
+// per-handler basis.
 type Config struct {
 	BackendInitializer     BackendInitializer
+	BackendAuthPassword    string        // password with which to authenticate to the backend's data provider
+	BackendConcurrency     int           // total number of backend processes available to process jobs
 	ConnectionString       string        // a string containing connection details for the backend
 	JobCheckInterval       time.Duration // the interval of time between checking for new future/retry jobs
 	FutureJobWindow        time.Duration // time duration between current time and job.RunAfter that goroutines schedule for future jobs
 	IdleTransactionTimeout int           // the number of milliseconds PgBackend transaction may idle before the connection is killed
+	ShutdownTimeout        time.Duration // duration to wait for jobs to finish during shutdown
 }
 
 // Option is a function that sets optional backend configuration

@@ -20,8 +20,8 @@ var (
 )
 
 const (
-	DuplicateJobID = -1
-	UnqueuedJobID  = -2
+	DuplicateJobID = "-1"
+	UnqueuedJobID  = "-2"
 )
 
 // Job contains all the data pertaining to jobs
