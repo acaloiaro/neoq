@@ -4,23 +4,17 @@ Background job processing for Go
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/acaloiaro/neoq.svg)](https://pkg.go.dev/github.com/acaloiaro/neoq) [![Gitter chat](https://badges.gitter.im/gitterHQ/gitter.png)](https://app.gitter.im/#/room/#neoq:gitter.im)
 
-# Installation
+# Usage
 
-`go get github.com/acaloiaro/neoq`
+`go get -u github.com/acaloiaro/neoq`
 
 # About
 
 Neoq is a queue-agnostic background job framework for Go.
 
-Neoq job handlers are the same, whether queues are in-memory for development/testing, or Postgres, Redis, or a custom queue for production -- allowing queue infrastructure to change without code change.
+Queue-agnostic means that whether you're using an in-memory queue for developing and testing, or Postgres or Redis queue in production -- your job processing code doesn't change. Job handlers are agnostic to the queue providing jobs. It also means that you can mix queue types within a single application. If you have ephemeral or periodic tasks, you may want to process them in an in-memory queue, and use Postgres or Redis queues for jobs requiring queue durability.
 
-Developing/testing or don't need a durable queue? Use the in-memory queue.
-
-Running an application in production? Use Postgres.
-
-Have higher throughput demands in production? Use Redis.
-
-Neoq does not aim to be the _fastest_ background job processor. It aims to be _fast_, _reliable_, and demand a _minimal infrastructure footprint_.
+Neoq aims to be _simple_, _reliable_, _easy to integrate_, and demand a _minimal infrastructure footprint_ by providing queue backends that match your existing tech stack.
 
 # What it does
 
@@ -29,12 +23,12 @@ Neoq does not aim to be the _fastest_ background job processor. It aims to be _f
 - **Job uniqueness**: jobs are fingerprinted based on their payload and status to prevent job duplication (multiple jobs with the same payload are not re-queued)
 - **Job Timeouts**: Queue handlers can be configured with per-job timeouts with millisecond accuracy
 - **Periodic Jobs**: Jobs can be scheduled periodically using standard cron syntax
-- **Future Jobs**: Jobs can be scheduled either for the future or immediate execution
+- **Future Jobs**: Jobs can be scheduled in the future
 - **Concurrency**: Concurrency is configurable for every queue
 
 # Getting Started
 
-Getting started is as simple as declaring queue handlers and adding jobs.
+Getting started is as simple as declaring queue handlers and adding jobs. You can create multiple neoq instances with different backends to meet your application's needs. E.g. an in-memory backend instance for ephemeral jobs and a Postgres backend instance for queue durability between application restarts.
 
 Additional documentation can be found in the wiki: https://github.com/acaloiaro/neoq/wiki
 
@@ -60,7 +54,7 @@ nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
 
 ## Enqueue jobs
 
-Enqueuing jobs adds jobs to the specified queue to be processed asynchronously.
+Enqueuing adds jobs to the specified queue to be processed asynchronously.
 
 **Example**: Add a "Hello World" job to the `hello_world` queue using the default in-memory backend.
 
@@ -84,8 +78,7 @@ ctx := context.Background()
 nq, _ := neoq.New(ctx,
   neoq.WithBackend(redis.Backend),
   redis.WithAddr("localhost:6379"),
-  redis.WithPassword(""),
-)
+  redis.WithPassword(""))
 
 nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
   j, _ := jobs.FromContext(ctx)
@@ -131,4 +124,4 @@ Additional example integration code can be found at https://github.com/acaloiaro
 
 # Status
 
-This project is currently in alpha. Future releases may change the API. It currently leaks some resources. It can handle unimportant workloads.
+This project is currently in alpha. Future releases may change the API.
