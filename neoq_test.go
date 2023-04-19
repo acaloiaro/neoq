@@ -225,7 +225,7 @@ func TestSetLogger(t *testing.T) {
 	}
 
 	<-done
-	expectedLogMsg := "job failed job failed to process: triggerering a log error"
+	expectedLogMsg := "job failed [job failed to process: triggerering a log error job_id 1]"
 	actualLogMsg := strings.Trim(buf.String(), "\n")
 	if actualLogMsg != expectedLogMsg {
 		t.Error(fmt.Errorf("%s != %s", actualLogMsg, expectedLogMsg)) //nolint:all

@@ -12,18 +12,18 @@ type TestLogger struct {
 
 // Info prints to stdout and signals its done channel
 func (h TestLogger) Info(m string, args ...any) {
-	h.L.Println(m)
+	h.L.Println(m, args)
 	h.Done <- true
 }
 
 // Debug prints to stdout and signals its done channel
 func (h TestLogger) Debug(m string, args ...any) {
-	h.L.Println(m)
+	h.L.Println(m, args)
 	h.Done <- true
 }
 
 // Error prints to stdout and signals its done channel
-func (h TestLogger) Error(m string, err error, args ...any) {
-	h.L.Println(m, err)
+func (h TestLogger) Error(m string, args ...any) {
+	h.L.Println(m, args)
 	h.Done <- true
 }
