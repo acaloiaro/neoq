@@ -297,7 +297,7 @@ func TestJobProcessingWithOptions(t *testing.T) {
 	case <-timeoutTimer:
 		err = jobs.ErrJobTimeout
 	case <-done:
-		expectedLogMsg := "error handling job job exceeded its 1ms timeout: context deadline exceeded" //nolint: dupword
+		expectedLogMsg := "error handling job [job exceeded its 1ms timeout: context deadline exceeded]" //nolint: dupword
 		actualLogMsg := strings.Trim(buf.String(), "\n")
 		if actualLogMsg != expectedLogMsg {
 			t.Error(fmt.Errorf("%s != %s", actualLogMsg, expectedLogMsg)) //nolint:all
