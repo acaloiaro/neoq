@@ -786,10 +786,6 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string, h handler.Handl
 
 	// execute the queue handler of this job
 	jobErr := handler.Exec(ctx, h)
-	if jobErr != nil {
-		err = fmt.Errorf("error executing handler: %w", jobErr)
-		return err
-	}
 
 	err = p.updateJob(ctx, jobErr)
 	if err != nil {
