@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"runtime"
+	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -93,8 +96,28 @@ func Exec(ctx context.Context, handler Handler) (err error) {
 	var errCh = make(chan error, 1)
 	var done = make(chan bool)
 	go func(ctx context.Context) {
+		defer func() {
+			if x := recover(); x != nil {
+				log.Printf("recovering from a panic in the job handler:\n%s", string(debug.Stack()))
+				_, file, line, ok := runtime.Caller(1) // skip the first frame (panic itself)
+				if ok && strings.Contains(file, "runtime/") {
+					// The panic came from the runtime, most likely due to incorrect
+					// map/slice usage. The parent frame should have the real trigger.
+					_, file, line, ok = runtime.Caller(2) //nolint: gomnd
+				}
+
+				// Include the file and line number info in the error, if runtime.Caller returned ok.
+				if ok {
+					errCh <- fmt.Errorf("panic [%s:%d]: %v", file, line, x) // nolint: goerr113
+				} else {
+					errCh <- fmt.Errorf("panic: %v", x) // nolint: goerr113
+				}
+			}
+
+			done <- true
+		}()
+
 		errCh <- handler.Handle(ctx)
-		done <- true
 	}(ctx)
 
 	select {
@@ -115,5 +138,5 @@ func Exec(ctx context.Context, handler Handler) (err error) {
 		}
 	}
 
-	return
+	return err
 }
