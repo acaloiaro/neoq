@@ -6,6 +6,7 @@ import (
 
 	"github.com/acaloiaro/neoq/backends/memory"
 	"github.com/acaloiaro/neoq/config"
+	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/types"
 )
 
@@ -49,5 +50,13 @@ func WithBackend(initializer config.BackendInitializer) config.Option {
 func WithJobCheckInterval(interval time.Duration) config.Option {
 	return func(c *config.Config) {
 		c.JobCheckInterval = interval
+	}
+}
+
+// WithLogLevel configures the log level for neoq's default logger. By default, log level is "INFO".
+// if SetLogger is used, WithLogLevel has no effect on the set logger
+func WithLogLevel(level logging.LogLevel) config.Option {
+	return func(c *config.Config) {
+		c.LogLevel = level
 	}
 }

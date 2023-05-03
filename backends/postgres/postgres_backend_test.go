@@ -15,8 +15,10 @@ import (
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
+	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/testutils"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/exp/slog"
 )
 
 var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
@@ -242,7 +244,7 @@ func TestCron(t *testing.T) {
 // TestBasicJobProcessingWithErrors tests that the postgres backend is able to update the status of jobs that fail
 func TestBasicJobProcessingWithErrors(t *testing.T) {
 	const queue = "testing"
-	done := make(chan bool)
+	done := make(chan bool, 10)
 	defer close(done)
 
 	var timeoutTimer = time.After(5 * time.Second)
@@ -254,7 +256,10 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 	}
 
 	ctx := context.TODO()
-	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(postgres.Backend),
+		postgres.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelError))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,17 +267,16 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 
 	h := handler.New(func(_ context.Context) (err error) {
 		err = errors.New("something bad happened") // nolint: goerr113
-		done <- true
 		return
 	})
+
+	buf := &strings.Builder{}
+	nq.SetLogger(testutils.TestLogger{L: log.New(buf, "", 0), Done: done})
 
 	err = nq.Start(ctx, queue, h)
 	if err != nil {
 		t.Error(err)
 	}
-
-	buf := &strings.Builder{}
-	nq.SetLogger(testutils.TestLogger{L: log.New(buf, "", 0), Done: done})
 
 	jid, e := nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue,
@@ -302,6 +306,7 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 		t.Error(err)
 	}
 
+	nq.SetLogger(slog.New(slog.HandlerOptions{Level: slog.LevelDebug}.NewTextHandler(os.Stdout)))
 	t.Cleanup(func() {
 		flushDB()
 	})

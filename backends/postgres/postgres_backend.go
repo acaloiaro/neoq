@@ -104,7 +104,6 @@ func Backend(ctx context.Context, opts ...config.Option) (pb types.Backend, err 
 		config:      config.New(),
 		handlers:    make(map[string]handler.Handler),
 		futureJobs:  make(map[string]time.Time),
-		logger:      slog.New(slog.NewTextHandler(os.Stdout)),
 		cron:        cron.New(),
 		cancelFuncs: []context.CancelFunc{},
 	}
@@ -114,6 +113,7 @@ func Backend(ctx context.Context, opts ...config.Option) (pb types.Backend, err 
 		opt(p.config)
 	}
 
+	p.logger = slog.New(slog.HandlerOptions{Level: p.config.LogLevel}.NewTextHandler(os.Stdout))
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
@@ -321,10 +321,13 @@ func (p *PgBackend) initializeDB(ctx context.Context) (err error) {
 
 // Enqueue adds jobs to the specified queue
 func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
+	p.logger.Debug("enqueueing job payload", slog.Any("job_payload", job.Payload))
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
 	p.mu.Unlock()
+
+	p.logger.Debug("acquiring new connection from connection pool")
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
 		err = fmt.Errorf("error acquiring connection: %w", err)
@@ -332,6 +335,7 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 	}
 	defer conn.Release()
 
+	p.logger.Debug("beginning new transaction to enqueue job")
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		err = fmt.Errorf("error creating transaction: %w", err)
@@ -346,19 +350,23 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 	// if already set, schedule the future job
 	now := time.Now()
 	if job.RunAfter.IsZero() {
+		p.logger.Debug("RunAfter not set, job will run immediately after being enqueued")
 		job.RunAfter = now
 	}
 
 	if job.Queue == "" {
+		p.logger.Debug("duplicate job fingerprint", "fingerprint", job.Fingerprint)
 		err = jobs.ErrNoQueueSpecified
 		return
 	}
 
 	jobID, err = p.enqueueJob(ctx, tx, job)
 	if err != nil {
+		p.logger.Error("error enqueueing job", "error", err)
 		err = fmt.Errorf("error enqueuing job: %w", err)
 	}
 
+	p.logger.Debug("job added to queue:", "job_id", jobID)
 	if jobID == jobs.DuplicateJobID {
 		err = ErrDuplicateJobID
 		return
@@ -366,12 +374,15 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 
 	// notify listeners that a new job has arrived if it's not a future job
 	if job.RunAfter.Equal(now) {
+		p.logger.Debug("sending NOTIFY for job:", "job_id", jobID)
 		_, err = tx.Exec(ctx, fmt.Sprintf("NOTIFY %s, '%s'", job.Queue, jobID))
 		if err != nil {
+			p.logger.Error("error NOTIFYING", "error", err)
 			err = fmt.Errorf("error executing transaction: %w", err)
 		}
 	} else {
 		p.mu.Lock()
+		p.logger.Debug("added job to future jobs list", "job_id", jobID, "run_after", job.RunAfter)
 		p.futureJobs[jobID] = job.RunAfter
 		p.mu.Unlock()
 	}
@@ -382,6 +393,7 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 		return
 	}
 
+	p.logger.Debug("transaction committed. job is in the queue:", "job_id", jobID)
 	return jobID, nil
 }
 
@@ -389,6 +401,7 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 func (p *PgBackend) Start(ctx context.Context, queue string, h handler.Handler) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 
+	p.logger.Debug("starting job processing", "queue", queue)
 	p.mu.Lock()
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
 	p.handlers[queue] = h
@@ -396,6 +409,7 @@ func (p *PgBackend) Start(ctx context.Context, queue string, h handler.Handler) 
 
 	err = p.start(ctx, queue)
 	if err != nil {
+		p.logger.Error("unable to start processing queue", "queue", queue, "error", err)
 		return
 	}
 	return
@@ -407,11 +421,13 @@ func (p *PgBackend) Start(ctx context.Context, queue string, h handler.Handler) 
 func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Handler) (err error) {
 	cd, err := crondescriptor.NewCronDescriptor(cronSpec)
 	if err != nil {
+		p.logger.Error("error creating cron descriptor", "cronspec", cronSpec, "error", err)
 		return fmt.Errorf("error creating cron descriptor: %w", err)
 	}
 
 	cdStr, err := cd.GetDescription(crondescriptor.Full)
 	if err != nil {
+		p.logger.Error("error getting cron descriptor", "descriptor", crondescriptor.Full, "error", err)
 		return fmt.Errorf("error getting cron description: %w", err)
 	}
 
@@ -445,6 +461,7 @@ func (p *PgBackend) SetLogger(logger logging.Logger) {
 
 // Shutdown shuts this backend down
 func (p *PgBackend) Shutdown(ctx context.Context) {
+	p.logger.Debug("starting shutdown.")
 	for queue := range p.handlers {
 		p.announceJob(ctx, queue, shutdownJobID)
 	}
@@ -460,6 +477,7 @@ func (p *PgBackend) Shutdown(ctx context.Context) {
 	p.cron.Stop()
 
 	p.cancelFuncs = nil
+	p.logger.Debug("shutdown complete")
 }
 
 // enqueueJob adds jobs to the queue, returning the job ID
@@ -472,6 +490,7 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (job
 		return
 	}
 
+	p.logger.Debug("checking if job fingerprint already exists (is duplicate)", "fingerprint", j.Fingerprint)
 	var rowCount int64
 	countRow := tx.QueryRow(ctx, `SELECT COUNT(*) as row_count
 		FROM neoq_jobs
@@ -487,14 +506,16 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (job
 		return jobs.DuplicateJobID, nil
 	}
 
+	p.logger.Debug("adding job to the queue")
 	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after)
 		VALUES ($1, $2, $3, $4) RETURNING id`,
 		j.Queue, j.Fingerprint, j.Payload, j.RunAfter).Scan(&jobID)
 	if err != nil {
+		err = fmt.Errorf("unable add job to queue: %w", err)
 		return
 	}
 
-	return
+	return jobID, err
 }
 
 // moveToDeadQueue moves jobs from the pending queue to the dead queue
