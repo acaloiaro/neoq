@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/types"
 )
 
@@ -24,13 +25,14 @@ const (
 // per-handler basis.
 type Config struct {
 	BackendInitializer     BackendInitializer
-	BackendAuthPassword    string        // password with which to authenticate to the backend's data provider
-	BackendConcurrency     int           // total number of backend processes available to process jobs
-	ConnectionString       string        // a string containing connection details for the backend
-	JobCheckInterval       time.Duration // the interval of time between checking for new future/retry jobs
-	FutureJobWindow        time.Duration // time duration between current time and job.RunAfter that goroutines schedule for future jobs
-	IdleTransactionTimeout int           // the number of milliseconds PgBackend transaction may idle before the connection is killed
-	ShutdownTimeout        time.Duration // duration to wait for jobs to finish during shutdown
+	BackendAuthPassword    string           // password with which to authenticate to the backend's data provider
+	BackendConcurrency     int              // total number of backend processes available to process jobs
+	ConnectionString       string           // a string containing connection details for the backend
+	JobCheckInterval       time.Duration    // the interval of time between checking for new future/retry jobs
+	FutureJobWindow        time.Duration    // time duration between current time and job.RunAfter that goroutines schedule for future jobs
+	IdleTransactionTimeout int              // the number of milliseconds PgBackend transaction may idle before the connection is killed
+	ShutdownTimeout        time.Duration    // duration to wait for jobs to finish during shutdown
+	LogLevel               logging.LogLevel // the log level of the default logger
 }
 
 // Option is a function that sets optional backend configuration
