@@ -76,13 +76,14 @@ func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend,
 	b := &redisBackend{
 		config:       config.New(),
 		mu:           &sync.Mutex{},
-		logger:       slog.New(slog.NewTextHandler(os.Stdout)),
 		taskProvider: NewMemoryTaskConfigProvider(),
 	}
 
 	for _, opt := range opts {
 		opt(b.config)
 	}
+
+	b.logger = slog.New(slog.HandlerOptions{Level: b.config.LogLevel}.NewTextHandler(os.Stdout))
 
 	if b.config.ConnectionString == "" {
 		err = ErrInvalidAddr

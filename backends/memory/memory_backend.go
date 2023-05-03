@@ -51,7 +51,6 @@ func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend,
 		handlers:     &sync.Map{},
 		futureJobs:   &sync.Map{},
 		fingerprints: &sync.Map{},
-		logger:       slog.New(slog.NewTextHandler(os.Stdout)),
 		jobCount:     0,
 		cancelFuncs:  []context.CancelFunc{},
 	}
@@ -60,6 +59,8 @@ func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend,
 	for _, opt := range opts {
 		opt(mb.config)
 	}
+
+	mb.logger = slog.New(slog.HandlerOptions{Level: mb.config.LogLevel}.NewTextHandler(os.Stdout))
 
 	backend = mb
 
