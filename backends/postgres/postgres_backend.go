@@ -234,7 +234,7 @@ func (p *PgBackend) initializeDB(ctx context.Context) (err error) {
 		}
 	}
 
-	conn, err = pgx.ConnectConfig(ctx, pgxCfg)
+	conn, err = pgx.Connect(ctx, connectStr)
 	if err != nil {
 		return
 	}
