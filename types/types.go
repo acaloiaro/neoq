@@ -11,8 +11,9 @@ import (
 // Backend interface is Neoq's primary API
 //
 // Backend is implemented by:
-//   - [pkg/github.com/acaloiaro/neoq/backends/memory.PgBackend]
+//   - [pkg/github.com/acaloiaro/neoq/backends/memory.MemBackend]
 //   - [pkg/github.com/acaloiaro/neoq/backends/postgres.PgBackend]
+//   - [pkg/github.com/acaloiaro/neoq/backends/redis.RedisBackend]
 type Backend interface {
 	// Enqueue queues jobs to be executed asynchronously
 	Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error)
