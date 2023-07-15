@@ -306,7 +306,7 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 		t.Error(err)
 	}
 
-	nq.SetLogger(slog.New(slog.HandlerOptions{Level: slog.LevelDebug}.NewTextHandler(os.Stdout)))
+	nq.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logging.LogLevelDebug})))
 	t.Cleanup(func() {
 		flushDB()
 	})

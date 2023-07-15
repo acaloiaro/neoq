@@ -84,8 +84,7 @@ func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend,
 		opt(b.config)
 	}
 
-	b.logger = slog.New(slog.HandlerOptions{Level: b.config.LogLevel}.NewTextHandler(os.Stdout))
-
+	b.logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: b.config.LogLevel}))
 	if b.config.ConnectionString == "" {
 		err = ErrInvalidAddr
 		return

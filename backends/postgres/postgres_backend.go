@@ -113,7 +113,7 @@ func Backend(ctx context.Context, opts ...config.Option) (pb types.Backend, err 
 		opt(p.config)
 	}
 
-	p.logger = slog.New(slog.HandlerOptions{Level: p.config.LogLevel}.NewTextHandler(os.Stdout))
+	p.logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: p.config.LogLevel}))
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
