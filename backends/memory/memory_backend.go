@@ -60,8 +60,7 @@ func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend,
 		opt(mb.config)
 	}
 
-	mb.logger = slog.New(slog.HandlerOptions{Level: mb.config.LogLevel}.NewTextHandler(os.Stdout))
-
+	mb.logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: mb.config.LogLevel}))
 	backend = mb
 
 	return
