@@ -198,7 +198,7 @@ func (p *PgBackend) initializeDB(ctx context.Context) (err error) {
 		return
 	}
 
-	connectStr := fmt.Sprintf("postgres://%s:%s@%s", pgxCfg.User, pgxCfg.Password, pgxCfg.Host)
+	connectStr := fmt.Sprintf("postgres://%s:%s@%s/%s", pgxCfg.User, pgxCfg.Password, pgxCfg.Host, pgxCfg.Database)
 	conn, err := pgx.Connect(ctx, connectStr)
 	if err != nil {
 		p.logger.Error("unableto connect to database", err)
