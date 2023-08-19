@@ -3,9 +3,8 @@ package memory_test
 import (
 	"context"
 	"fmt"
-	"log"
+	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +14,7 @@ import (
 	"github.com/acaloiaro/neoq/config"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/jobs"
-	"github.com/acaloiaro/neoq/testutils"
+	"github.com/acaloiaro/neoq/logging"
 	"github.com/pkg/errors"
 	"github.com/robfig/cron"
 	"golang.org/x/exp/slog"
@@ -33,7 +32,7 @@ func TestBasicJobProcessing(t *testing.T) {
 	numJobs := 1000
 	doneCnt := 0
 	done := make(chan bool)
-	var timeoutTimer = time.After(5 * time.Second)
+	timeoutTimer := time.After(5 * time.Second)
 
 	ctx := context.TODO()
 	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
@@ -158,8 +157,14 @@ var testFutureJobs = &sync.Map{}
 
 func TestFutureJobScheduling(t *testing.T) {
 	ctx := context.Background()
-	testLogger := testutils.TestLogger{L: log.New(&strings.Builder{}, "", 0), Done: make(chan bool)}
-	testBackend := memory.TestingBackend(config.New(), cron.New(), &sync.Map{}, &sync.Map{}, testFutureJobs, &sync.Map{}, testLogger)
+	testBackend := memory.TestingBackend(
+		config.New(),
+		cron.New(),
+		&sync.Map{},
+		&sync.Map{},
+		testFutureJobs,
+		&sync.Map{},
+		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logging.LogLevelDebug})))
 
 	nq, err := neoq.New(ctx, neoq.WithBackend(testBackend))
 	if err != nil {
@@ -194,6 +199,124 @@ func TestFutureJobScheduling(t *testing.T) {
 	}
 }
 
+// This test was added in response to the following issue: https://github.com/acaloiaro/neoq/issues/56
+// nolint: gocognit, gocyclo
+func TestFutureJobSchedulingMultipleQueues(t *testing.T) {
+	ctx := context.Background()
+	nq, err := neoq.New(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	jobsPerQueueCount := 100
+
+	jobsProcessed1 := 0
+	jobsProcessed2 := 0
+
+	q1 := "queue1"
+	q2 := "queue2"
+
+	done1 := make(chan bool)
+	done2 := make(chan bool)
+
+	h1 := handler.New(func(ctx context.Context) (err error) {
+		var j *jobs.Job
+		j, err = jobs.FromContext(ctx)
+		if err != nil {
+			return
+		}
+
+		if j.Queue != q1 {
+			err = errors.New("handling job from queu2 with queue1 handler. this is a bug")
+		}
+
+		done1 <- true
+		return
+	})
+
+	h2 := handler.New(func(ctx context.Context) (err error) {
+		var j *jobs.Job
+		j, err = jobs.FromContext(ctx)
+		if err != nil {
+			return
+		}
+
+		if j.Queue != q2 {
+			err = errors.New("handling job from queue1 with queue2 handler. this is a bug")
+		}
+
+		done2 <- true
+		return
+	})
+
+	if err := nq.Start(ctx, q1, h1); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := nq.Start(ctx, q2, h2); err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		for i := 1; i <= jobsPerQueueCount; i++ {
+			_, err = nq.Enqueue(ctx, &jobs.Job{
+				ID:       int64(i),
+				Queue:    q1,
+				Payload:  map[string]interface{}{"ID": i},
+				RunAfter: time.Now().Add(1 * time.Millisecond),
+			})
+			if err != nil {
+				err = fmt.Errorf("job was not enqueued. either it was duplicate or this error caused it: %w", err)
+				t.Error(err)
+			}
+		}
+
+		for j := 1; j <= jobsPerQueueCount; j++ {
+			_, err = nq.Enqueue(ctx, &jobs.Job{
+				ID:       int64(j),
+				Queue:    q2,
+				Payload:  map[string]interface{}{"ID": j},
+				RunAfter: time.Now().Add(1 * time.Millisecond),
+			})
+			if err != nil {
+				err = fmt.Errorf("job was not enqueued. either it was duplicate or this error caused it: %w", err)
+				t.Error(err)
+			}
+		}
+	}()
+
+	timeoutTimer := time.After(10 * time.Second)
+results_loop:
+	for {
+		select {
+		case <-timeoutTimer:
+			err = jobs.ErrJobTimeout
+			break results_loop
+		case <-done1:
+			jobsProcessed1++
+		case <-done2:
+			jobsProcessed2++
+		default:
+			if jobsProcessed1 == jobsPerQueueCount && jobsProcessed2 == jobsPerQueueCount {
+				break results_loop
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if err != nil {
+		t.Error(err)
+	}
+	if jobsProcessed1 != jobsPerQueueCount {
+		// nolint: goerr113
+		t.Error(fmt.Errorf("handler1 should have handled %d jobs, but handled %d", jobsPerQueueCount, jobsProcessed1))
+	}
+	if jobsProcessed2 != jobsPerQueueCount {
+		// nolint: goerr113
+		t.Error(fmt.Errorf("handler2 should have handled %d jobs, but handled %d", jobsPerQueueCount, jobsProcessed2))
+	}
+}
+
 func TestCron(t *testing.T) {
 	const cronSpec = "* * * * * *"
 	ctx := context.TODO()
@@ -203,7 +326,7 @@ func TestCron(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	var done = make(chan bool)
+	done := make(chan bool)
 	h := handler.New(func(ctx context.Context) (err error) {
 		done <- true
 		return

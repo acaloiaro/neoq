@@ -39,7 +39,6 @@ func flushDB() {
 	_, err = conn.Query(context.Background(), "DELETE FROM neoq_jobs") // nolint: gocritic
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "'neoq_jobs' table flush failed: %v\n", err)
-		os.Exit(1) // nolint: gocritic
 	}
 }
 
@@ -56,9 +55,9 @@ func TestBasicJobProcessing(t *testing.T) {
 	done := make(chan bool)
 	defer close(done)
 
-	var timeoutTimer = time.After(5 * time.Second)
+	timeoutTimer := time.After(5 * time.Second)
 
-	var connString = os.Getenv("TEST_DATABASE_URL")
+	connString := os.Getenv("TEST_DATABASE_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_DATABASE_URL not set")
 		return
@@ -113,9 +112,9 @@ func TestBasicJobMultipleQueue(t *testing.T) {
 	done := make(chan bool)
 	doneCnt := 0
 
-	var timeoutTimer = time.After(5 * time.Second)
+	timeoutTimer := time.After(5 * time.Second)
 
-	var connString = os.Getenv("TEST_DATABASE_URL")
+	connString := os.Getenv("TEST_DATABASE_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_DATABASE_URL not set")
 		return
@@ -195,7 +194,7 @@ func TestCron(t *testing.T) {
 	done := make(chan bool, 1)
 	defer close(done)
 	const cron = "* * * * * *"
-	var connString = os.Getenv("TEST_DATABASE_URL")
+	connString := os.Getenv("TEST_DATABASE_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_DATABASE_URL not set")
 		return
@@ -247,9 +246,9 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 	done := make(chan bool, 10)
 	defer close(done)
 
-	var timeoutTimer = time.After(5 * time.Second)
+	timeoutTimer := time.After(5 * time.Second)
 
-	var connString = os.Getenv("TEST_DATABASE_URL")
+	connString := os.Getenv("TEST_DATABASE_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_DATABASE_URL not set")
 		return

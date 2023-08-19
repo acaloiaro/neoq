@@ -15,7 +15,7 @@ const (
 	// E.g. right now is 16:00 and a job's RunAfter is 16:30 of the same date. This job will get a dedicated goroutine to
 	// wait until the job's RunAfter, scheduling the job to be run exactly at RunAfter
 	DefaultFutureJobWindow  = 30 * time.Second
-	DefaultJobCheckInterval = 5 * time.Second
+	DefaultJobCheckInterval = 1 * time.Second
 )
 
 // Config configures neoq and its backends
