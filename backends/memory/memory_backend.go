@@ -39,6 +39,7 @@ type MemBackend struct {
 	mu           *sync.Mutex          // mutext to protect mutating state on a pgWorker
 	cancelFuncs  []context.CancelFunc // A collection of cancel functions to be called upon Shutdown()
 	jobCount     int64                // number of jobs that have been queued since start
+	initialized  bool
 }
 
 // Backend is a [config.BackendInitializer] that initializes a new memory-backed neoq backend
@@ -71,6 +72,8 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, 
 	var queueChan chan *jobs.Job
 	var qc any
 	var ok bool
+
+	m.logger.Debug("adding a new job", "queue", job.Queue)
 
 	if qc, ok = m.queues.Load(job.Queue); !ok {
 		return jobs.UnqueuedJobID, fmt.Errorf("%w: %s", handler.ErrNoProcessorForQueue, job.Queue)
@@ -120,7 +123,7 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, 
 
 // Start starts processing jobs with the specified queue and handler
 func (m *MemBackend) Start(ctx context.Context, queue string, h handler.Handler) (err error) {
-	var queueCapacity = h.QueueCapacity
+	queueCapacity := h.QueueCapacity
 	if queueCapacity == emptyCapacity {
 		queueCapacity = defaultMemQueueCapacity
 	}
@@ -200,14 +203,18 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 	var ok bool
 
 	if ht, ok = m.handlers.Load(queue); !ok {
-		return fmt.Errorf("%w: %s", handler.ErrNoHandlerForQueue, queue)
+		err = fmt.Errorf("%w: %s", handler.ErrNoHandlerForQueue, queue)
+		m.logger.Error("error loading handler for queue", queue)
+		return
 	}
 
 	if qc, ok = m.queues.Load(queue); !ok {
-		return fmt.Errorf("%w: %s", handler.ErrNoProcessorForQueue, queue)
+		err = fmt.Errorf("%w: %s", handler.ErrNoProcessorForQueue, queue)
+		m.logger.Error("error loading channel for queue", queue)
+		return err
 	}
 
-	go func() { m.scheduleFutureJobs(ctx, queue) }()
+	go func() { m.scheduleFutureJobs(ctx) }()
 
 	h = ht.(handler.Handler)
 	queueChan = qc.(chan *jobs.Job)
@@ -244,9 +251,19 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 	return nil
 }
 
-func (m *MemBackend) scheduleFutureJobs(ctx context.Context, queue string) {
+func (m *MemBackend) scheduleFutureJobs(ctx context.Context) {
 	// check for new future jobs on an interval
 	ticker := time.NewTicker(m.config.JobCheckInterval)
+
+	// if the queues list is non-empty, then we've already started, and this function is a no-op
+	m.mu.Lock()
+	if !m.initialized {
+		m.initialized = true
+		m.mu.Unlock()
+	} else {
+		m.mu.Unlock()
+		return
+	}
 
 	for {
 		// loop over list of future jobs, scheduling goroutines to wait for jobs that are due within the next 30 seconds
@@ -257,14 +274,16 @@ func (m *MemBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 			timeUntilRunAfter := time.Until(job.RunAfter)
 			if timeUntilRunAfter <= m.config.FutureJobWindow {
 				m.removeFutureJob(job.ID)
+				m.logger.Debug("dequeued future job", "id", job.ID, "queue", job.Queue)
 				go func(j *jobs.Job) {
 					scheduleCh := time.After(timeUntilRunAfter)
 					<-scheduleCh
-					if qc, ok := m.queues.Load(queue); ok {
+					m.logger.Debug("loading job for queue", "queue", j.Queue)
+					if qc, ok := m.queues.Load(j.Queue); ok {
 						queueChan = qc.(chan *jobs.Job)
 						queueChan <- j
 					} else {
-						m.logger.Error(fmt.Sprintf("no queue processor for queue '%s'", queue), handler.ErrNoHandlerForQueue)
+						m.logger.Error(fmt.Sprintf("no queue processor for queue '%s'", j.Queue), handler.ErrNoHandlerForQueue)
 					}
 				}(job)
 			}

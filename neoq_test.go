@@ -17,8 +17,10 @@ import (
 	"github.com/acaloiaro/neoq/testutils"
 )
 
-var errTrigger = errors.New("triggerering a log error")
-var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
+var (
+	errTrigger         = errors.New("triggerering a log error")
+	errPeriodicTimeout = errors.New("timed out waiting for periodic job")
+)
 
 func ExampleNew() {
 	ctx := context.Background()
@@ -91,7 +93,7 @@ func TestStart(t *testing.T) {
 	timeout := false
 	numJobs := 1
 	doneCnt := 0
-	var done = make(chan bool, numJobs)
+	done := make(chan bool, numJobs)
 
 	ctx := context.TODO()
 	nq, err := New(ctx, WithBackend(memory.Backend))
@@ -162,7 +164,7 @@ func TestStartCron(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	var done = make(chan bool)
+	done := make(chan bool)
 	h := handler.New(func(ctx context.Context) (err error) {
 		done <- true
 		return
@@ -194,7 +196,7 @@ func TestStartCron(t *testing.T) {
 
 func TestSetLogger(t *testing.T) {
 	const queue = "testing"
-	var done = make(chan bool)
+	done := make(chan bool, 1)
 	buf := &strings.Builder{}
 	ctx := context.TODO()
 
@@ -225,7 +227,7 @@ func TestSetLogger(t *testing.T) {
 	}
 
 	<-done
-	expectedLogMsg := "job failed [job failed to process: triggerering a log error job_id 1]"
+	expectedLogMsg := "adding a new job [queue testing]"
 	actualLogMsg := strings.Trim(buf.String(), "\n")
 	if actualLogMsg != expectedLogMsg {
 		t.Error(fmt.Errorf("%s != %s", actualLogMsg, expectedLogMsg)) //nolint:all
