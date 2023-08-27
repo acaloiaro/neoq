@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,9 @@ import (
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/types"
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres" // nolint: revive
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/iancoleman/strcase"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,9 +26,12 @@ import (
 	"golang.org/x/exp/slog"
 )
 
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
 const (
 	postgresBackendName       = "postgres"
-	DefaultPgConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/neoq"
+	DefaultPgConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable"
 	PendingJobIDQuery         = `SELECT id
 					FROM neoq_jobs
 					WHERE queue = $1
@@ -119,7 +126,7 @@ func Backend(ctx context.Context, opts ...config.Option) (pb types.Backend, err 
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
 	p.mu.Unlock()
 
-	err = p.initializeDB(ctx)
+	err = p.initializeDB(p.config.ConnectionString)
 	if err != nil {
 		return
 	}
@@ -190,130 +197,23 @@ func txFromContext(ctx context.Context) (t pgx.Tx, err error) {
 // initializeDB initializes the tables, types, and indices necessary to operate Neoq
 //
 //nolint:funlen,gocyclo,cyclop
-func (p *PgBackend) initializeDB(ctx context.Context) (err error) {
-	var pgxCfg *pgx.ConnConfig
-	var tx pgx.Tx
-	pgxCfg, err = pgx.ParseConfig(p.config.ConnectionString)
+func (p *PgBackend) initializeDB(connStr string) (err error) {
+	d, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
+		p.logger.Error("unable to run migrations", "error", err)
 		return
 	}
 
-	connectStr := fmt.Sprintf("postgres://%s:%s@%s/%s", pgxCfg.User, pgxCfg.Password, pgxCfg.Host, pgxCfg.Database)
-	conn, err := pgx.Connect(ctx, connectStr)
+	m, err := migrate.NewWithSourceInstance("iofs", d, connStr)
 	if err != nil {
-		p.logger.Error("unableto connect to database", err)
-		return
-	}
-	defer conn.Close(ctx)
-
-	var dbExists bool
-	dbExistsQ := fmt.Sprintf(`SELECT EXISTS (SELECT datname FROM pg_catalog.pg_database WHERE datname = '%s');`, pgxCfg.Database)
-	rows, err := conn.Query(ctx, dbExistsQ)
-	if err != nil {
-		return fmt.Errorf("unable to determne if jobs table exists: %w", err)
-	}
-	for rows.Next() {
-		err = rows.Scan(&dbExists)
-		if err != nil {
-			return fmt.Errorf("unable to determine if jobs table exists: %w", err)
-		}
-	}
-	defer rows.Close()
-
-	conn.Close(ctx)
-	conn, err = pgx.Connect(ctx, connectStr)
-	if err != nil {
-		return fmt.Errorf("unable to connect to database: %w", err)
-	}
-	defer conn.Close(ctx)
-
-	if !dbExists {
-		createDBQ := fmt.Sprintf("CREATE DATABASE %s", pgxCfg.Database)
-		if _, err = conn.Exec(ctx, createDBQ); err != nil {
-			return fmt.Errorf("unable to create neoq database: %w", err)
-		}
-	}
-
-	conn, err = pgx.Connect(ctx, connectStr)
-	if err != nil {
+		p.logger.Error("unable to run migrations", "error", err)
 		return
 	}
 
-	tx, err = conn.Begin(ctx)
-	if err != nil {
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		p.logger.Error("unable to run migrations", "error", err)
 		return
-	}
-	defer func(ctx context.Context) { _ = tx.Rollback(ctx) }(ctx) // rollback has no effect if the transaction has been committed
-
-	jobsTableExistsQ := `SELECT EXISTS (SELECT FROM
-				pg_tables
-		WHERE
-				schemaname = 'public' AND
-				tablename  = 'neoq_jobs'
-    );`
-	rows, err = tx.Query(ctx, jobsTableExistsQ)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "unable to determne if jobs table exists: %v", err)
-		return
-	}
-
-	var tablesInitialized bool
-	for rows.Next() {
-		err = rows.Scan(&tablesInitialized)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "unable to determine if jobs table exists: %v", err)
-			return
-		}
-	}
-	defer rows.Close()
-
-	if !tablesInitialized {
-		createTablesQ := `
-			CREATE TYPE job_status AS ENUM (
-				'new',
-				'processed',
-				'failed'
-			);
-
-			CREATE TABLE neoq_dead_jobs (
-					id SERIAL NOT NULL,
-					fingerprint text NOT NULL,
-					queue text NOT NULL,
-					status job_status NOT NULL default 'failed',
-					payload jsonb,
-					retries integer,
-					max_retries integer,
-					created_at timestamp with time zone DEFAULT now(),
-					error text
-			);
-
-			CREATE TABLE neoq_jobs (
-					id SERIAL NOT NULL,
-					fingerprint text NOT NULL,
-					queue text NOT NULL,
-					status job_status NOT NULL default 'new',
-					payload jsonb,
-					retries integer default 0,
-					max_retries integer default 23,
-					run_after timestamp with time zone DEFAULT now(),
-					ran_at timestamp with time zone,
-					created_at timestamp with time zone DEFAULT now(),
-					error text
-			);
-
-			CREATE INDEX neoq_job_fetcher_idx ON neoq_jobs (id, status, run_after);
-			CREATE INDEX neoq_jobs_fetcher_idx ON neoq_jobs (queue, status, run_after);
-			CREATE INDEX neoq_jobs_fingerprint_idx ON neoq_jobs (fingerprint, status);
-		`
-
-		_, err = tx.Exec(ctx, createTablesQ)
-		if err != nil {
-			return fmt.Errorf("unable to create job status enum: %w", err)
-		}
-
-		if err = tx.Commit(ctx); err != nil {
-			return fmt.Errorf("error committing transaction: %w", err)
-		}
 	}
 
 	return nil
