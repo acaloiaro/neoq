@@ -195,10 +195,10 @@ func TestStartCron(t *testing.T) {
 }
 
 func TestSetLogger(t *testing.T) {
+	timeoutTimer := time.After(5 * time.Second)
 	const queue = "testing"
-	done := make(chan bool, 1)
-	buf := &strings.Builder{}
-	ctx := context.TODO()
+	logsChan := make(chan string, 10)
+	ctx := context.Background()
 
 	nq, err := New(ctx, WithBackend(memory.Backend))
 	if err != nil {
@@ -206,7 +206,7 @@ func TestSetLogger(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	nq.SetLogger(testutils.TestLogger{L: log.New(buf, "", 0), Done: done})
+	nq.SetLogger(testutils.TestLogger{L: log.New(testutils.ChanWriter{Ch: logsChan}, "", 0)})
 
 	h := handler.New(func(ctx context.Context) (err error) {
 		err = errTrigger
@@ -215,21 +215,32 @@ func TestSetLogger(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-
 	err = nq.Start(ctx, queue, h)
 	if err != nil {
 		t.Error(err)
 	}
-
 	_, err = nq.Enqueue(ctx, &jobs.Job{Queue: queue})
 	if err != nil {
 		t.Error(err)
 	}
 
-	<-done
 	expectedLogMsg := "adding a new job [queue testing]"
-	actualLogMsg := strings.Trim(buf.String(), "\n")
-	if actualLogMsg != expectedLogMsg {
-		t.Error(fmt.Errorf("%s != %s", actualLogMsg, expectedLogMsg)) //nolint:all
+results_loop:
+	for {
+		select {
+		case <-timeoutTimer:
+			err = jobs.ErrJobTimeout
+			break results_loop
+		case actualLogMsg := <-logsChan:
+			if strings.Contains(actualLogMsg, expectedLogMsg) {
+				err = nil
+				break results_loop
+			}
+			err = fmt.Errorf("'%s' NOT CONTAINS '%s'", actualLogMsg, expectedLogMsg) //nolint:all
+		}
+	}
+
+	if err != nil {
+		t.Error(err)
 	}
 }

@@ -185,7 +185,7 @@ func TestFutureJobScheduling(t *testing.T) {
 		Payload: map[string]interface{}{
 			"message": "hello world",
 		},
-		RunAfter: time.Now().Add(5 * time.Second),
+		RunAfter: time.Now().UTC().Add(5 * time.Second),
 	})
 	if err != nil || jid == jobs.DuplicateJobID {
 		err = fmt.Errorf("job was not enqueued. either it was duplicate or this error caused it: %w", err)

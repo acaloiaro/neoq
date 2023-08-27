@@ -83,7 +83,7 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, 
 
 	// Make sure RunAfter is set to a non-zero value if not provided by the caller
 	// if already set, schedule the future job
-	now := time.Now()
+	now := time.Now().UTC()
 	if job.RunAfter.IsZero() {
 		job.RunAfter = now
 	}
@@ -237,7 +237,7 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 						return
 					}
 
-					m.logger.Error("job failed", err, "job_id", job.ID)
+					m.logger.Error("job failed", "error", err, "job_id", job.ID)
 					runAfter := internal.CalculateBackoff(job.Retries)
 					job.RunAfter = runAfter
 					m.queueFutureJob(job)
@@ -307,7 +307,12 @@ func (m *MemBackend) handleJob(ctx context.Context, job *jobs.Job, h handler.Han
 		job.Retries++
 	}
 
-	// execute the queue handler of this job
+	if job.Deadline != nil && job.Deadline.UTC().Before(time.Now().UTC()) {
+		m.logger.Debug("job deadline is in the past, skipping", "job_id", job.ID)
+		err = jobs.ErrJobExceededDeadline
+		return
+	}
+
 	err = handler.Exec(ctx, h)
 	if err != nil {
 		job.Error = null.StringFrom(err.Error())

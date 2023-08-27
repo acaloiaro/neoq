@@ -25,6 +25,7 @@ Neoq aims to be _simple_, _reliable_, _easy to integrate_, and demand a _minimal
 - **Periodic Jobs**: Jobs can be scheduled periodically using standard cron syntax
 - **Future Jobs**: Jobs can be scheduled in the future
 - **Concurrency**: Concurrency is configurable for every queue
+- **Job Deadlines**: If a job doesn't complete before a specific `time.Time`, the job expires 
 
 # Getting Started
 
