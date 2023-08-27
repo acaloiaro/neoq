@@ -18,12 +18,12 @@ import (
 	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/testutils"
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/exp/slog"
 )
 
 var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
 
 func flushDB() {
+	ctx := context.Background()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
 		return
@@ -31,8 +31,16 @@ func flushDB() {
 
 	conn, err := pgx.Connect(context.Background(), dbURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
-		os.Exit(1)
+		// an error was encountered connecting to the db. this may simply mean that we're running tests against an
+		// uninitialized database and the database needs to be created. By creating a new pg backend instance with
+		// neoq.New, we run the db initialization process.
+		// if no errors return from `New`, then we've succeeded
+		var newErr error
+		_, newErr = neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(dbURL))
+		if newErr != nil {
+			fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
+			return
+		}
 	}
 	defer conn.Close(context.Background())
 
@@ -80,11 +88,13 @@ func TestBasicJobProcessing(t *testing.T) {
 		t.Error(err)
 	}
 
+	deadline := time.Now().UTC().Add(5 * time.Second)
 	jid, e := nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
 			"message": "hello world",
 		},
+		Deadline: &deadline,
 	})
 	if e != nil || jid == jobs.DuplicateJobID {
 		t.Error(e)
@@ -243,11 +253,8 @@ func TestCron(t *testing.T) {
 // TestBasicJobProcessingWithErrors tests that the postgres backend is able to update the status of jobs that fail
 func TestBasicJobProcessingWithErrors(t *testing.T) {
 	const queue = "testing"
-	done := make(chan bool, 10)
-	defer close(done)
-
+	logsChan := make(chan string, 100)
 	timeoutTimer := time.After(5 * time.Second)
-
 	connString := os.Getenv("TEST_DATABASE_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_DATABASE_URL not set")
@@ -269,8 +276,7 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 		return
 	})
 
-	buf := &strings.Builder{}
-	nq.SetLogger(testutils.TestLogger{L: log.New(buf, "", 0), Done: done})
+	nq.SetLogger(testutils.TestLogger{L: log.New(testutils.ChanWriter{Ch: logsChan}, "", 0)})
 
 	err = nq.Start(ctx, queue, h)
 	if err != nil {
@@ -287,17 +293,19 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 		t.Error(e)
 	}
 
-	select {
-	case <-timeoutTimer:
-		err = jobs.ErrJobTimeout
-	case <-done:
-		// the error is returned after the done channel receives its message, so we need to give time for the logger to
-		// have logged the error that was returned by the handler
-		time.Sleep(100 * time.Millisecond)
-		expectedLogMsg := "job failed to process: something bad happened"
-		actualLogMsg := strings.Trim(buf.String(), "\n")
-		if strings.Contains(actualLogMsg, expectedLogMsg) {
-			t.Error(fmt.Errorf("'%s' NOT CONTAINS '%s'", actualLogMsg, expectedLogMsg)) //nolint:all
+results_loop:
+	for {
+		select {
+		case <-timeoutTimer:
+			err = jobs.ErrJobTimeout
+			break results_loop
+		case actualLogMsg := <-logsChan:
+			expectedLogMsg := "job failed to process: something bad happened"
+			if strings.Contains(actualLogMsg, expectedLogMsg) {
+				err = nil
+				break results_loop
+			}
+			err = fmt.Errorf("'%s' NOT CONTAINS '%s'", actualLogMsg, expectedLogMsg) //nolint:all
 		}
 	}
 
@@ -305,7 +313,6 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 		t.Error(err)
 	}
 
-	nq.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logging.LogLevelDebug})))
 	t.Cleanup(func() {
 		flushDB()
 	})

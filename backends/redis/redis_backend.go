@@ -24,10 +24,12 @@ import (
 	"golang.org/x/exp/slog"
 )
 
-var (
-	// ErrInvalidAddr indicates that the provided address is not a valid redis connection string
-	ErrInvalidAddr = errors.New("invalid connecton string: see documentation for valid connection strings")
-)
+// All jobs are placed on the same 'default' queue (until a compelling case is made for using different asynq queues
+// for every job)
+const defaultAsynqQueue = "default"
+
+// ErrInvalidAddr indicates that the provided address is not a valid redis connection string
+var ErrInvalidAddr = errors.New("invalid connecton string: see documentation for valid connection strings")
 
 // RedisBackend is a Redis-backed neoq backend
 // nolint: revive
@@ -35,6 +37,7 @@ type RedisBackend struct {
 	types.Backend
 	client       *asynq.Client
 	server       *asynq.Server
+	inspector    *asynq.Inspector
 	mux          *asynq.ServeMux
 	config       *config.Config
 	logger       logging.Logger
@@ -73,7 +76,7 @@ func (m *memoryTaskConfigProvider) addConfig(taskConfig *asynq.PeriodicTaskConfi
 }
 
 // Backend is a [config.BackendInitializer] that initializes a new Redis-backed neoq backend
-func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend, err error) {
+func Backend(_ context.Context, opts ...config.Option) (backend types.Backend, err error) {
 	b := &RedisBackend{
 		config:       config.New(),
 		mu:           &sync.Mutex{},
@@ -98,6 +101,7 @@ func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend,
 	if b.config.BackendAuthPassword != "" {
 		clientOpt.Password = b.config.BackendAuthPassword
 	}
+	b.inspector = asynq.NewInspector(clientOpt)
 	b.client = asynq.NewClient(clientOpt)
 	b.server = asynq.NewServer(
 		clientOpt,
@@ -115,7 +119,7 @@ func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend,
 			PeriodicTaskConfigProvider: b.taskProvider,
 			SyncInterval:               500 * time.Millisecond,
 			SchedulerOpts: &asynq.SchedulerOpts{
-				PostEnqueueFunc: func(info *asynq.TaskInfo, err error) {
+				PostEnqueueFunc: func(_ *asynq.TaskInfo, err error) {
 					if err != nil {
 						b.logger.Error("unable to schedule task", err)
 					}
@@ -193,12 +197,7 @@ func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string
 		return
 	}
 	task := asynq.NewTask(job.Queue, payload)
-	if job.RunAfter.IsZero() {
-		_, err = b.client.EnqueueContext(ctx, task, asynq.TaskID(job.Fingerprint))
-	} else {
-		_, err = b.client.EnqueueContext(ctx, task, asynq.TaskID(job.Fingerprint), asynq.ProcessAt(job.RunAfter))
-	}
-
+	_, err = b.client.EnqueueContext(ctx, task, jobToTaskOptions(job)...)
 	if err != nil {
 		err = fmt.Errorf("unable to enqueue task: %w", err)
 	}
@@ -209,27 +208,41 @@ func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string
 // Start starts processing jobs with the specified queue and handler
 func (b *RedisBackend) Start(_ context.Context, queue string, h handler.Handler) (err error) {
 	b.mux.HandleFunc(queue, func(ctx context.Context, t *asynq.Task) (err error) {
+		taskID := t.ResultWriter().TaskID()
 		var p map[string]any
 		if err = json.Unmarshal(t.Payload(), &p); err != nil {
-			b.logger.Info("job has no payload")
+			b.logger.Info("job has no payload", "task_id", taskID)
+		}
+
+		ti, err := b.inspector.GetTaskInfo(defaultAsynqQueue, taskID)
+		if err != nil {
+			b.logger.Error("unable to process job", "error", err)
+			return
+		}
+		if !ti.Deadline.IsZero() && ti.Deadline.UTC().Before(time.Now().UTC()) {
+			err = jobs.ErrJobExceededDeadline
+			b.logger.Debug("job deadline is in the past, skipping", "task_id", taskID)
+			return
 		}
 
 		job := &jobs.Job{
-			CreatedAt: time.Now(),
+			CreatedAt: time.Now().UTC(),
 			Queue:     queue,
 			Payload:   p,
+			Deadline:  &ti.Deadline,
+			RunAfter:  ti.NextProcessAt,
 		}
 
 		ctx = withJobContext(ctx, job)
 		err = handler.Exec(ctx, h)
 		if err != nil {
-			b.logger.Error("error handling job", err)
+			b.logger.Error("error handling job", "error", err)
 		}
 
 		return
 	})
 
-	return
+	return nil
 }
 
 // StartCron starts processing jobs with the specified cron schedule and handler
@@ -259,6 +272,21 @@ func (b *RedisBackend) StartCron(ctx context.Context, cronSpec string, h handler
 		Task:     asynq.NewTask(queue, nil),
 	}
 	b.taskProvider.addConfig(c)
+
+	return
+}
+
+// jobToTaskOptions converts jobs.Job to a slice of asynq.Option that corresponds with its settings
+func jobToTaskOptions(job *jobs.Job) (opts []asynq.Option) {
+	opts = append(opts, asynq.TaskID(job.Fingerprint))
+
+	if !job.RunAfter.IsZero() {
+		opts = append(opts, asynq.ProcessAt(job.RunAfter))
+	}
+
+	if job.Deadline != nil {
+		opts = append(opts, asynq.Deadline(*job.Deadline))
+	}
 
 	return
 }

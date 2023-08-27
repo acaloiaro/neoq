@@ -25,7 +25,7 @@ func CalculateBackoff(retryCount int) time.Time {
 	const backoffExponent = 4
 	const maxInt = 30
 	p := int(math.Round(math.Pow(float64(retryCount), backoffExponent)))
-	return time.Now().Add(time.Duration(p+15+RandInt(maxInt)*retryCount+1) * time.Second)
+	return time.Now().UTC().Add(time.Duration(p+15+RandInt(maxInt)*retryCount+1) * time.Second)
 }
 
 // RandInt returns a random integer up to max

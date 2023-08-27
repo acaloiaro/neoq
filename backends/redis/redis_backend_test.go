@@ -2,10 +2,10 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,12 +17,14 @@ import (
 	"github.com/hibiken/asynq"
 )
 
-const queue = "testing"
-const queue2 = "testing2"
+const (
+	queue  = "testing"
+	queue2 = "testing2"
+)
 
 func init() {
 	var err error
-	var connString = os.Getenv("TEST_REDIS_URL")
+	connString := os.Getenv("TEST_REDIS_URL")
 	if connString == "" {
 		return
 	}
@@ -62,10 +64,10 @@ func init() {
 }
 
 func TestBasicJobProcessing(t *testing.T) {
-	var timeoutTimer = time.After(5 * time.Second)
-	var done = make(chan bool)
+	timeoutTimer := time.After(5 * time.Second)
+	done := make(chan bool)
 
-	var connString = os.Getenv("TEST_REDIS_URL")
+	connString := os.Getenv("TEST_REDIS_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_REDIS_URL not set")
 		return
@@ -118,12 +120,12 @@ func TestBasicJobProcessing(t *testing.T) {
 
 // TestBasicJobMultipleQueue tests that the redis backend is able to process jobs on multiple queues
 func TestBasicJobMultipleQueue(t *testing.T) {
-	var done = make(chan bool)
-	var doneCnt = 0
+	done := make(chan bool)
+	doneCnt := 0
 
-	var timeoutTimer = time.After(30 * time.Second)
+	timeoutTimer := time.After(30 * time.Second)
 
-	var connString = os.Getenv("TEST_REDIS_URL")
+	connString := os.Getenv("TEST_REDIS_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_REDIS_URL not set")
 		return
@@ -188,7 +190,6 @@ results_loop:
 			err = jobs.ErrJobTimeout
 			break results_loop
 		case <-done:
-			log.Println("DONE")
 			doneCnt++
 			if doneCnt == 2 {
 				break results_loop
@@ -204,9 +205,9 @@ results_loop:
 func TestStartCron(t *testing.T) {
 	done := make(chan bool)
 
-	var timeoutTimer = time.After(5 * time.Second)
+	timeoutTimer := time.After(5 * time.Second)
 
-	var connString = os.Getenv("TEST_REDIS_URL")
+	connString := os.Getenv("TEST_REDIS_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_REDIS_URL not set")
 		return
@@ -243,34 +244,33 @@ func TestStartCron(t *testing.T) {
 
 func TestJobProcessingWithOptions(t *testing.T) {
 	const queue = "testing"
-	var timeoutTimer = time.After(5 * time.Second)
-	var done = make(chan bool)
+	timeoutTimer := time.After(5 * time.Second)
+	logsChan := make(chan string, 1)
 
-	var connString = os.Getenv("TEST_REDIS_URL")
+	connString := os.Getenv("TEST_REDIS_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_REDIS_URL not set")
 		return
 	}
 
 	password := os.Getenv("REDIS_PASSWORD")
-	ctx := context.TODO()
+	ctx := context.Background()
 	nq, err := neoq.New(
 		ctx,
 		neoq.WithBackend(Backend),
 		WithAddr(connString),
 		WithPassword(password),
-		WithShutdownTimeout(time.Millisecond))
+		WithShutdownTimeout(500*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer nq.Shutdown(ctx)
 
-	buf := &strings.Builder{}
-	nq.SetLogger(testutils.TestLogger{L: log.New(buf, "", 0), Done: done})
+	logger := testutils.TestLogger{L: log.New(&testutils.ChanWriter{Ch: logsChan}, "", 0)}
+	nq.SetLogger(logger)
 
 	h := handler.New(func(_ context.Context) (err error) {
 		time.Sleep(50 * time.Millisecond)
-		done <- true
 		return
 	})
 	h.WithOptions(
@@ -293,15 +293,76 @@ func TestJobProcessingWithOptions(t *testing.T) {
 		t.Error(e)
 	}
 
+	expectedLogMsg := "error handling job [error job exceeded its 1ms timeout: context deadline exceeded]" //nolint: dupword
 	select {
 	case <-timeoutTimer:
 		err = jobs.ErrJobTimeout
-	case <-done:
-		expectedLogMsg := "error handling job [job exceeded its 1ms timeout: context deadline exceeded]" //nolint: dupword
-		actualLogMsg := strings.Trim(buf.String(), "\n")
-		if actualLogMsg != expectedLogMsg {
-			t.Error(fmt.Errorf("%s != %s", actualLogMsg, expectedLogMsg)) //nolint:all
+	case actualLogMsg := <-logsChan:
+		if actualLogMsg == expectedLogMsg {
+			err = nil
+			break
 		}
+
+		err = fmt.Errorf("%s != %s", actualLogMsg, expectedLogMsg) //nolint:all
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func TestJobProcessingWithJobDeadline(t *testing.T) {
+	const queue = "testing"
+	timeoutTimer := time.After(100 * time.Millisecond)
+	done := make(chan bool)
+
+	connString := os.Getenv("TEST_REDIS_URL")
+	if connString == "" {
+		t.Skip("Skipping: TEST_REDIS_URL not set")
+		return
+	}
+
+	password := os.Getenv("REDIS_PASSWORD")
+	ctx := context.Background()
+	nq, err := neoq.New(
+		ctx,
+		neoq.WithBackend(Backend),
+		WithAddr(connString),
+		WithPassword(password),
+		WithShutdownTimeout(500*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(func(_ context.Context) (err error) {
+		time.Sleep(50 * time.Millisecond)
+		done <- true
+		return
+	})
+
+	err = nq.Start(ctx, queue, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	dl := time.Now().UTC()
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": fmt.Sprintf("hello world: %d", internal.RandInt(10000000000)),
+		},
+		Deadline: &dl,
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+	select {
+	case <-timeoutTimer:
+		err = nil
+	case <-done:
+		err = errors.New("job should not have completed, but did") //nolint:all
 	}
 
 	if err != nil {

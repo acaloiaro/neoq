@@ -39,7 +39,7 @@ const (
 					AND run_after <= NOW()
 					FOR UPDATE SKIP LOCKED
 					LIMIT 1`
-	PendingJobQuery = `SELECT id,fingerprint,queue,status,payload,retries,max_retries,run_after,ran_at,created_at,error
+	PendingJobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE id = $1
 					AND status NOT IN ('processed')
@@ -248,7 +248,7 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 
 	// Make sure RunAfter is set to a non-zero value if not provided by the caller
 	// if already set, schedule the future job
-	now := time.Now()
+	now := time.Now().UTC()
 	if job.RunAfter.IsZero() {
 		p.logger.Debug("RunAfter not set, job will run immediately after being enqueued")
 		job.RunAfter = now
@@ -345,7 +345,7 @@ func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Ha
 				return
 			}
 
-			p.logger.Error("error queueing cron job", err)
+			p.logger.Error("error queueing cron job", "error", err)
 		}
 	}); err != nil {
 		return fmt.Errorf("error adding cron: %w", err)
@@ -407,9 +407,9 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (job
 	}
 
 	p.logger.Debug("adding job to the queue")
-	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
-		j.Queue, j.Fingerprint, j.Payload, j.RunAfter).Scan(&jobID)
+	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline).Scan(&jobID)
 	if err != nil {
 		err = fmt.Errorf("unable add job to queue: %w", err)
 		return
@@ -425,9 +425,9 @@ func (p *PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *jobs.Job,
 		return
 	}
 
-	_, err = tx.Exec(ctx, `INSERT INTO neoq_dead_jobs(id, queue, fingerprint, payload, retries, max_retries, error)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		j.ID, j.Queue, j.Fingerprint, j.Payload, j.Retries, j.MaxRetries, jobErr.Error())
+	_, err = tx.Exec(ctx, `INSERT INTO neoq_dead_jobs(id, queue, fingerprint, payload, retries, max_retries, error, deadline)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		j.ID, j.Queue, j.Fingerprint, j.Payload, j.Retries, j.MaxRetries, jobErr.Error(), j.Deadline)
 
 	return
 }
@@ -453,6 +453,7 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 	errMsg := ""
 
 	if jobErr != nil {
+		p.logger.Error("job failed", "job_error", jobErr)
 		status = internal.JobStatusFailed
 		errMsg = jobErr.Error()
 	}
@@ -476,10 +477,10 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 	if status == internal.JobStatusFailed {
 		runAfter = internal.CalculateBackoff(job.Retries)
 		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3, retries = $4, run_after = $5 WHERE id = $6"
-		_, err = tx.Exec(ctx, qstr, time.Now(), errMsg, status, job.Retries, runAfter, job.ID)
+		_, err = tx.Exec(ctx, qstr, time.Now().UTC(), errMsg, status, job.Retries, runAfter, job.ID)
 	} else {
 		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3 WHERE id = $4"
-		_, err = tx.Exec(ctx, qstr, time.Now(), errMsg, status, job.ID)
+		_, err = tx.Exec(ctx, qstr, time.Now().UTC(), errMsg, status, job.ID)
 	}
 
 	if err != nil {
@@ -537,7 +538,7 @@ func (p *PgBackend) start(ctx context.Context, queue string) (err error) {
 						continue
 					}
 
-					p.logger.Error("job failed", err, "job_id", jobID)
+					p.logger.Error("job failed", "error", err, "job_id", jobID)
 
 					continue
 				}
@@ -654,7 +655,7 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 					break
 				}
 
-				p.logger.Error("failed to fetch pending job", err, "job_id", jobID)
+				p.logger.Error("failed to fetch pending job", "error", err, "job_id", jobID)
 			} else {
 				jobsCh <- jobID
 			}
@@ -688,6 +689,13 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string, h handler.Handl
 		return
 	}
 
+	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
+		err = jobs.ErrJobExceededDeadline
+		p.logger.Debug("job deadline is in he past, skipping", "job_id", job.ID)
+		err = p.updateJob(ctx, err)
+		return
+	}
+
 	ctx = withJobContext(ctx, job)
 	ctx = context.WithValue(ctx, txCtxVarKey, tx)
 
@@ -698,7 +706,6 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string, h handler.Handl
 
 	// execute the queue handler of this job
 	jobErr := handler.Exec(ctx, h)
-
 	err = p.updateJob(ctx, jobErr)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -712,7 +719,7 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string, h handler.Handl
 	err = tx.Commit(ctx)
 	if err != nil {
 		errMsg := "unable to commit job transaction. retrying this job may dupliate work:"
-		p.logger.Error(errMsg, err, "job_id", job.ID)
+		p.logger.Error(errMsg, "error", err, "job_id", job.ID)
 		return fmt.Errorf("%s %w", errMsg, err)
 	}
 
