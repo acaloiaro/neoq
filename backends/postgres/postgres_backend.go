@@ -126,7 +126,7 @@ func Backend(ctx context.Context, opts ...config.Option) (pb types.Backend, err 
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
 	p.mu.Unlock()
 
-	err = p.initializeDB(p.config.ConnectionString)
+	err = p.initializeDB()
 	if err != nil {
 		return
 	}
@@ -197,14 +197,37 @@ func txFromContext(ctx context.Context) (t pgx.Tx, err error) {
 // initializeDB initializes the tables, types, and indices necessary to operate Neoq
 //
 //nolint:funlen,gocyclo,cyclop
-func (p *PgBackend) initializeDB(connStr string) (err error) {
+func (p *PgBackend) initializeDB() (err error) {
 	d, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
 		p.logger.Error("unable to run migrations", "error", err)
 		return
 	}
 
-	m, err := migrate.NewWithSourceInstance("iofs", d, connStr)
+	// `pgx` supports config params that `pq` does not. Since pgx is neoq's primary SQL interface, user often configure
+	// it with pgx-specific config params like `max_conn_count`. However, `go-migrate` uses `pq` under the hood, and
+	// these `pgx` config params cause `pq` to throw an "unknown config parameter" error when they're encountered.
+	// So we must first sanitize connection strings for pq
+	var pgxCfg *pgx.ConnConfig
+	pgxCfg, err = pgx.ParseConfig(p.config.ConnectionString)
+	if err != nil {
+		p.logger.Error("unable to run migrations", "error", err)
+		return
+	}
+
+	sslMode := "verify-ca"
+	// nil TLSConfig means "sslmode=disable" was set on the connection
+	if pgxCfg.TLSConfig == nil {
+		sslMode = "disable"
+	}
+
+	pqConnectionString := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s",
+		pgxCfg.User,
+		pgxCfg.Password,
+		pgxCfg.Host,
+		pgxCfg.Database,
+		sslMode)
+	m, err := migrate.NewWithSourceInstance("iofs", d, pqConnectionString)
 	if err != nil {
 		p.logger.Error("unable to run migrations", "error", err)
 		return
@@ -282,9 +305,9 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 		}
 	} else {
 		p.mu.Lock()
-		p.logger.Debug("added job to future jobs list", "job_id", jobID, "run_after", job.RunAfter)
 		p.futureJobs[jobID] = job.RunAfter
 		p.mu.Unlock()
+		p.logger.Debug("added job to future jobs list", "job_id", jobID, "run_after", job.RunAfter)
 	}
 
 	err = tx.Commit(ctx)
@@ -731,7 +754,7 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string, h handler.Handl
 // This will lead to jobs not getting processed until the worker is restarted.
 // Implement disconnect handling.
 func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, ready chan bool) {
-	c = make(chan string)
+	c = make(chan string, p.handlers[queue].Concurrency)
 	ready = make(chan bool)
 
 	go func(ctx context.Context) {
