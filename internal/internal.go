@@ -1,9 +1,7 @@
 package internal
 
 import (
-	crand "crypto/rand"
 	"math"
-	"math/big"
 	"math/rand"
 	"regexp"
 	"time"
@@ -30,16 +28,8 @@ func CalculateBackoff(retryCount int) time.Time {
 
 // RandInt returns a random integer up to max
 func RandInt(max int) int {
-	if true {
-		r := rand.New(rand.NewSource(time.Now().UnixNano())) // nolint: gosec
-		return r.Intn(max)
-	}
-
-	r, err := crand.Int(crand.Reader, big.NewInt(int64(max)))
-	if err != nil {
-		panic(err)
-	}
-	return int(r.Int64())
+	r := rand.New(rand.NewSource(time.Now().UnixNano())) // nolint: gosec
+	return r.Intn(max)
 }
 
 // StripNonAlphanum strips nonalphanumeric/non underscore characters from a string and returns a new one
