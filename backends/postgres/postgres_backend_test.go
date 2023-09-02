@@ -115,6 +115,54 @@ func TestBasicJobProcessing(t *testing.T) {
 	})
 }
 
+// TestDuplicateJobRejection tests that the backend rejects jobs that are duplicates
+func TestDuplicateJobRejection(t *testing.T) {
+	const queue = "testing"
+
+	connString := os.Getenv("TEST_DATABASE_URL")
+	if connString == "" {
+		t.Skip("Skipping: TEST_DATABASE_URL not set")
+		return
+	}
+
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		err = e
+	}
+
+	_, e2 := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+	})
+
+	// we submitted two duplicate jobs; the error should be a duplicate job error
+	if !errors.Is(e2, postgres.ErrDuplicateJob) {
+		err = e2
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	t.Cleanup(func() {
+		flushDB()
+	})
+}
+
 // TestBasicJobMultipleQueue tests that the postgres backend is able to process jobs on multiple queues
 func TestBasicJobMultipleQueue(t *testing.T) {
 	const queue = "testing"

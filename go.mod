@@ -7,6 +7,7 @@ require (
 	github.com/guregu/null v4.0.0+incompatible
 	github.com/hibiken/asynq v0.24.0
 	github.com/iancoleman/strcase v0.2.0
+	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
 	github.com/jackc/pgx/v5 v5.3.1
 	github.com/jsuar/go-cron-descriptor v0.1.0
 	github.com/pkg/errors v0.9.1
