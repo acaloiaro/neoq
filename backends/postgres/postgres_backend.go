@@ -19,7 +19,9 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres" // nolint: revive
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/iancoleman/strcase"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 	"github.com/robfig/cron"
@@ -64,7 +66,7 @@ var (
 	shutdownJobID                 = "-1" // job ID announced when triggering a shutdown
 	shutdownAnnouncementAllowance = 100  // ms
 	ErrCnxString                  = errors.New("invalid connecton string: see documentation for valid connection strings")
-	ErrDuplicateJobID             = errors.New("duplicate job id")
+	ErrDuplicateJob               = errors.New("duplicate job")
 	ErrNoTransactionInContext     = errors.New("context does not have a Tx set")
 )
 
@@ -278,36 +280,21 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 	}
 
 	if job.Queue == "" {
-		p.logger.Debug("duplicate job fingerprint", "fingerprint", job.Fingerprint)
 		err = jobs.ErrNoQueueSpecified
 		return
 	}
 
 	jobID, err = p.enqueueJob(ctx, tx, job)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgerrcode.UniqueViolation {
+				err = ErrDuplicateJob
+				return
+			}
+		}
 		p.logger.Error("error enqueueing job", "error", err)
 		err = fmt.Errorf("error enqueuing job: %w", err)
-	}
-
-	p.logger.Debug("job added to queue:", "job_id", jobID)
-	if jobID == jobs.DuplicateJobID {
-		err = ErrDuplicateJobID
-		return
-	}
-
-	// notify listeners that a new job has arrived if it's not a future job
-	if job.RunAfter.Equal(now) {
-		p.logger.Debug("sending NOTIFY for job:", "job_id", jobID)
-		_, err = tx.Exec(ctx, fmt.Sprintf("NOTIFY %s, '%s'", job.Queue, jobID))
-		if err != nil {
-			p.logger.Error("error NOTIFYING", "error", err)
-			err = fmt.Errorf("error executing transaction: %w", err)
-		}
-	} else {
-		p.mu.Lock()
-		p.futureJobs[jobID] = job.RunAfter
-		p.mu.Unlock()
-		p.logger.Debug("added job to future jobs list", "job_id", jobID, "run_after", job.RunAfter)
 	}
 
 	err = tx.Commit(ctx)
@@ -315,8 +302,18 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 		err = fmt.Errorf("error committing transaction: %w", err)
 		return
 	}
+	p.logger.Debug("job added to queue:", "job_id", jobID)
 
-	p.logger.Debug("transaction committed. job is in the queue:", "job_id", jobID)
+	// notify listeners that a new job has arrived if it's not a future job
+	if job.RunAfter.Equal(now) {
+		p.announceJob(ctx, job.Queue, jobID)
+	} else {
+		p.mu.Lock()
+		p.futureJobs[jobID] = job.RunAfter
+		p.mu.Unlock()
+		p.logger.Debug("added job to future jobs list", "job_id", jobID, "run_after", job.RunAfter)
+	}
+
 	return jobID, nil
 }
 
@@ -411,22 +408,6 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (job
 	err = jobs.FingerprintJob(j)
 	if err != nil {
 		return
-	}
-
-	p.logger.Debug("checking if job fingerprint already exists (is duplicate)", "fingerprint", j.Fingerprint)
-	var rowCount int64
-	countRow := tx.QueryRow(ctx, `SELECT COUNT(*) as row_count
-		FROM neoq_jobs
-		WHERE fingerprint = $1
-		AND status NOT IN ('processed')`, j.Fingerprint)
-	err = countRow.Scan(&rowCount)
-	if err != nil {
-		return
-	}
-
-	// this is a duplicate job; skip it
-	if rowCount > 0 {
-		return jobs.DuplicateJobID, nil
 	}
 
 	p.logger.Debug("adding job to the queue")
