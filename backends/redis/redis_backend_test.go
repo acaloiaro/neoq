@@ -266,8 +266,7 @@ func TestJobProcessingWithOptions(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	logger := testutils.TestLogger{L: log.New(&testutils.ChanWriter{Ch: logsChan}, "", 0)}
-	nq.SetLogger(logger)
+	nq.SetLogger(testutils.NewTestLogger(logsChan))
 
 	h := handler.New(func(_ context.Context) (err error) {
 		time.Sleep(50 * time.Millisecond)
