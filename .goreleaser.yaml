@@ -35,6 +35,9 @@ changelog:
   - title: Features
     regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
     order: 0
+  - title: Maintenance
+    regexp: '^.*?maint(\([[:word:]]+\))??!?:.+$'
+    order: 1
   - title: "Bug fixes"
     regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
   - title: Others

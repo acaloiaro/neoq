@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"testing"
@@ -206,7 +205,7 @@ func TestSetLogger(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	nq.SetLogger(testutils.TestLogger{L: log.New(testutils.ChanWriter{Ch: logsChan}, "", 0)})
+	nq.SetLogger(testutils.NewTestLogger(logsChan))
 
 	h := handler.New(func(ctx context.Context) (err error) {
 		err = errTrigger

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"testing"
@@ -324,7 +323,7 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 		return
 	})
 
-	nq.SetLogger(testutils.TestLogger{L: log.New(testutils.ChanWriter{Ch: logsChan}, "", 0)})
+	nq.SetLogger(testutils.NewTestLogger(logsChan))
 
 	err = nq.Start(ctx, queue, h)
 	if err != nil {
