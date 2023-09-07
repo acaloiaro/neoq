@@ -1,4 +1,3 @@
-SHELL := /bin/bash
 GOLANGCI_LINT_VERSION ?= v1.51.1
 
 all: fmt vet mod

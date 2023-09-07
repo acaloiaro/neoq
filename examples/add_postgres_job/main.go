@@ -12,11 +12,11 @@ import (
 )
 
 func main() {
-	var done = make(chan bool, 1)
+	done := make(chan bool, 1)
 	const queue = "foobar"
 	ctx := context.Background()
 	nq, err := neoq.New(ctx,
-		postgres.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"),
+		postgres.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable"),
 		neoq.WithBackend(postgres.Backend),
 	)
 	if err != nil {

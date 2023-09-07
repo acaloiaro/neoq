@@ -32,12 +32,14 @@ changelog:
       - '^docs:'
       - '^test:'
   groups:
+  - title: 'BREAKING CHANGES'
+    regexp: '^.*?break(\([[:word:]]+\))??!?:.+$'
   - title: Features
     regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
-    order: 0
+    order: 1
   - title: Maintenance
     regexp: '^.*?maint(\([[:word:]]+\))??!?:.+$'
-    order: 1
+    order: 2
   - title: "Bug fixes"
     regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
   - title: Others

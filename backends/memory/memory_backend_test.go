@@ -11,7 +11,6 @@ import (
 
 	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/backends/memory"
-	"github.com/acaloiaro/neoq/config"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
@@ -25,6 +24,19 @@ const (
 )
 
 var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
+
+func ExampleNew() {
+	ctx := context.Background()
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
+	if err != nil {
+		fmt.Println("initializing a new Neoq with no params should not return an error:", err)
+		return
+	}
+	defer nq.Shutdown(ctx)
+
+	fmt.Println("neoq initialized with default memory backend")
+	// Output: neoq initialized with default memory backend
+}
 
 // TestBasicJobProcessing tests that the memory backend is able to process the most basic jobs with the
 // most basic configuration.
@@ -158,7 +170,7 @@ var testFutureJobs = &sync.Map{}
 func TestFutureJobScheduling(t *testing.T) {
 	ctx := context.Background()
 	testBackend := memory.TestingBackend(
-		config.New(),
+		neoq.NewConfig(),
 		cron.New(),
 		&sync.Map{},
 		&sync.Map{},
@@ -203,7 +215,7 @@ func TestFutureJobScheduling(t *testing.T) {
 // nolint: gocognit, gocyclo
 func TestFutureJobSchedulingMultipleQueues(t *testing.T) {
 	ctx := context.Background()
-	nq, err := neoq.New(ctx)
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 	if err != nil {
 		t.Fatal(err)
 	}

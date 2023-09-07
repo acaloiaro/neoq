@@ -15,7 +15,7 @@ func main() {
 	ctx := context.Background()
 	nq, err := neoq.New(ctx,
 		neoq.WithBackend(postgres.Backend),
-		postgres.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"),
+		postgres.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable"),
 		postgres.WithTransactionTimeout(1000), // nolint: mnd, gomnd
 	)
 	if err != nil {
