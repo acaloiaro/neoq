@@ -12,12 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/acaloiaro/neoq/config"
+	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
-	"github.com/acaloiaro/neoq/types"
 	"github.com/hibiken/asynq"
 	"github.com/iancoleman/strcase"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
@@ -34,12 +33,12 @@ var ErrInvalidAddr = errors.New("invalid connecton string: see documentation for
 // RedisBackend is a Redis-backed neoq backend
 // nolint: revive
 type RedisBackend struct {
-	types.Backend
+	neoq.Neoq
 	client       *asynq.Client
 	server       *asynq.Server
 	inspector    *asynq.Inspector
 	mux          *asynq.ServeMux
-	config       *config.Config
+	config       *neoq.Config
 	logger       logging.Logger
 	mu           *sync.Mutex // mutext to protect mutating backend state
 	taskProvider *memoryTaskConfigProvider
@@ -75,10 +74,10 @@ func (m *memoryTaskConfigProvider) addConfig(taskConfig *asynq.PeriodicTaskConfi
 	m.mu.Unlock()
 }
 
-// Backend is a [config.BackendInitializer] that initializes a new Redis-backed neoq backend
-func Backend(_ context.Context, opts ...config.Option) (backend types.Backend, err error) {
+// Backend is a [neoq.BackendInitializer] that initializes a new Redis-backed neoq backend
+func Backend(_ context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, err error) {
 	b := &RedisBackend{
-		config:       config.New(),
+		config:       neoq.NewConfig(),
 		mu:           &sync.Mutex{},
 		taskProvider: newMemoryTaskConfigProvider(),
 	}
@@ -149,22 +148,22 @@ func Backend(_ context.Context, opts ...config.Option) (backend types.Backend, e
 }
 
 // WithAddr configures neoq to connect to Redis with the given address
-func WithAddr(addr string) config.Option {
-	return func(c *config.Config) {
+func WithAddr(addr string) neoq.ConfigOption {
+	return func(c *neoq.Config) {
 		c.ConnectionString = addr
 	}
 }
 
 // WithPassword configures neoq to connect to Redis with the given password
-func WithPassword(password string) config.Option {
-	return func(c *config.Config) {
+func WithPassword(password string) neoq.ConfigOption {
+	return func(c *neoq.Config) {
 		c.BackendAuthPassword = password
 	}
 }
 
 // WithConcurrency configures the number of workers available to process jobs across all queues
-func WithConcurrency(concurrency int) config.Option {
-	return func(c *config.Config) {
+func WithConcurrency(concurrency int) neoq.ConfigOption {
+	return func(c *neoq.Config) {
 		c.BackendConcurrency = concurrency
 	}
 }
@@ -173,8 +172,8 @@ func WithConcurrency(concurrency int) config.Option {
 // before forcing them to abort durning Shutdown()
 //
 // If unset or zero, default timeout of 8 seconds is used.
-func WithShutdownTimeout(timeout time.Duration) config.Option {
-	return func(c *config.Config) {
+func WithShutdownTimeout(timeout time.Duration) neoq.ConfigOption {
+	return func(c *neoq.Config) {
 		c.ShutdownTimeout = timeout
 	}
 }

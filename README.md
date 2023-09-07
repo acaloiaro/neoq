@@ -45,7 +45,7 @@ Queue Handlers are simple Go functions that accept a `Context` parameter.
 
 ```go
 ctx := context.Background()
-nq, _ := neoq.New(ctx)
+nq, _ := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
   j, _ := jobs.FromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
@@ -61,7 +61,7 @@ Enqueuing adds jobs to the specified queue to be processed asynchronously.
 
 ```go
 ctx := context.Background()
-nq, _ := neoq.New(ctx)
+nq, _ := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 nq.Enqueue(ctx, &jobs.Job{
   Queue: "hello_world",
   Payload: map[string]interface{}{

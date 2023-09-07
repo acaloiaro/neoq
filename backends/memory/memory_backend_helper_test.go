@@ -6,18 +6,18 @@ import (
 	"context"
 	"sync"
 
-	"github.com/acaloiaro/neoq/config"
+	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/logging"
-	"github.com/acaloiaro/neoq/types"
 	"github.com/robfig/cron"
 )
 
 // TestingBackend initializes a backend for testing purposes
-func TestingBackend(conf *config.Config,
+func TestingBackend(conf *neoq.Config,
 	c *cron.Cron,
 	queues, h, futureJobs, fingerprints *sync.Map,
-	logger logging.Logger) config.BackendInitializer {
-	return func(ctx context.Context, opts ...config.Option) (backend types.Backend, err error) {
+	logger logging.Logger,
+) neoq.BackendInitializer {
+	return func(ctx context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, err error) {
 		mb := &MemBackend{
 			config:       conf,
 			cron:         c,
