@@ -9,12 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/acaloiaro/neoq/config"
+	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
-	"github.com/acaloiaro/neoq/types"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres" // nolint: revive
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -69,8 +68,8 @@ var (
 
 // PgBackend is a Postgres-based Neoq backend
 type PgBackend struct {
-	types.Backend
-	config      *config.Config
+	neoq.Neoq
+	config      *neoq.Config
 	logger      logging.Logger
 	cron        *cron.Cron
 	mu          *sync.RWMutex // mutex to protect mutating state on a pgWorker
@@ -84,7 +83,7 @@ type PgBackend struct {
 //
 // If the database does not yet exist, Neoq will attempt to create the database and related tables by default.
 //
-// Backend requires that one of the [config.ConfigOption] is [WithConnectionString]
+// Backend requires that one of the [neoq.ConfigOption] is [WithConnectionString]
 //
 // Connection strings may be a URL or DSN-style connection strings. The connection string supports multiple
 // options detailed below.
@@ -104,10 +103,13 @@ type PgBackend struct {
 // # Example URL
 //
 // postgres://worker:secret@workerdb.example.com:5432/mydb?sslmode=verify-ca&pool_max_conns=10
-func Backend(ctx context.Context, opts ...config.Option) (pb types.Backend, err error) {
+func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err error) {
+	cfg := neoq.NewConfig()
+	cfg.IdleTransactionTimeout = neoq.DefaultIdleTxTimeout
+
 	p := &PgBackend{
 		mu:          &sync.RWMutex{},
-		config:      config.New(),
+		config:      cfg,
 		handlers:    make(map[string]handler.Handler),
 		futureJobs:  make(map[string]time.Time),
 		cron:        cron.New(),
@@ -164,8 +166,8 @@ func Backend(ctx context.Context, opts ...config.Option) (pb types.Backend, err 
 }
 
 // WithConnectionString configures neoq postgres backend to use the specified connection string when connecting to a backend
-func WithConnectionString(connectionString string) config.Option {
-	return func(c *config.Config) {
+func WithConnectionString(connectionString string) neoq.ConfigOption {
+	return func(c *neoq.Config) {
 		c.ConnectionString = connectionString
 	}
 }
@@ -175,8 +177,8 @@ func WithConnectionString(connectionString string) config.Option {
 // The timeout is the number of milliseconds that a transaction may sit idle before postgres terminates the
 // transaction's underlying connection. The timeout should be longer than your longest job takes to complete. If set
 // too short, job state will become unpredictable, e.g. retry counts may become incorrect.
-func WithTransactionTimeout(txTimeout int) config.Option {
-	return func(c *config.Config) {
+func WithTransactionTimeout(txTimeout int) neoq.ConfigOption {
+	return func(c *neoq.Config) {
 		c.IdleTransactionTimeout = txTimeout
 	}
 }

@@ -1,4 +1,4 @@
-package neoq
+package neoq_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/backends/memory"
 	"github.com/acaloiaro/neoq/backends/postgres"
 	"github.com/acaloiaro/neoq/handler"
@@ -23,7 +24,7 @@ var (
 
 func ExampleNew() {
 	ctx := context.Background()
-	nq, err := New(ctx, WithBackend(memory.Backend))
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 	if err != nil {
 		fmt.Println("initializing a new Neoq with no params should not return an error:", err)
 		return
@@ -43,7 +44,7 @@ func ExampleNew_postgres() {
 		return
 	}
 
-	nq, err := New(ctx, WithBackend(postgres.Backend), postgres.WithConnectionString(pgURL))
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(pgURL))
 	if err != nil {
 		fmt.Println("neoq's postgres backend failed to initialize:", err)
 		return
@@ -56,7 +57,7 @@ func ExampleNew_postgres() {
 
 func ExampleWithBackend() {
 	ctx := context.Background()
-	nq, err := New(ctx, WithBackend(memory.Backend))
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 	if err != nil {
 		fmt.Println("initializing a new Neoq with no params should not return an error:", err)
 		return
@@ -76,7 +77,7 @@ func ExampleWithBackend_postgres() {
 		return
 	}
 
-	nq, err := New(ctx, WithBackend(postgres.Backend), postgres.WithConnectionString(pgURL))
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(pgURL))
 	if err != nil {
 		fmt.Println("initializing a new Neoq with no params should not return an error:", err)
 		return
@@ -95,7 +96,7 @@ func TestStart(t *testing.T) {
 	done := make(chan bool, numJobs)
 
 	ctx := context.TODO()
-	nq, err := New(ctx, WithBackend(memory.Backend))
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func TestStart(t *testing.T) {
 func TestStartCron(t *testing.T) {
 	const cron = "* * * * * *"
 	ctx := context.TODO()
-	nq, err := New(ctx, WithBackend(memory.Backend))
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +200,7 @@ func TestSetLogger(t *testing.T) {
 	logsChan := make(chan string, 10)
 	ctx := context.Background()
 
-	nq, err := New(ctx, WithBackend(memory.Backend))
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,28 +8,27 @@ import (
 	"sync"
 	"time"
 
-	"github.com/acaloiaro/neoq/config"
+	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
-	"github.com/acaloiaro/neoq/types"
 	"github.com/guregu/null"
-	"github.com/iancoleman/strcase"                          // TODO factor out
-	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor" // TODO factor out
+	"github.com/iancoleman/strcase"
+	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 	"github.com/robfig/cron"
 	"golang.org/x/exp/slog"
 )
 
 const (
-	defaultMemQueueCapacity = 10000 // the default capacity of individual queues
-	emptyCapacity           = 0
+	defaultMemQueueCapacity = 10000 // default capacity of individual queues
+	emptyCapacity           = 0     // queue size at which queues are considered empty
 )
 
 // MemBackend is a memory-backed neoq backend
 type MemBackend struct {
-	types.Backend
-	config       *config.Config
+	neoq.Neoq
+	config       *neoq.Config
 	logger       logging.Logger
 	handlers     *sync.Map // map queue names [string] to queue handlers [Handler]
 	fingerprints *sync.Map // map fingerprints [string] to job [Job]
@@ -42,10 +41,10 @@ type MemBackend struct {
 	initialized  bool
 }
 
-// Backend is a [config.BackendInitializer] that initializes a new memory-backed neoq backend
-func Backend(ctx context.Context, opts ...config.Option) (backend types.Backend, err error) {
+// Backend is a [neoq.BackendInitializer] that initializes a new memory-backed neoq backend
+func Backend(_ context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, err error) {
 	mb := &MemBackend{
-		config:       config.New(),
+		config:       neoq.NewConfig(),
 		cron:         cron.New(),
 		mu:           &sync.Mutex{},
 		queues:       &sync.Map{},
