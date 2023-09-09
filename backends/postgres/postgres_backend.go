@@ -187,7 +187,7 @@ func WithTransactionTimeout(txTimeout int) neoq.ConfigOption {
 //
 //nolint:funlen,gocyclo,cyclop
 func (p *PgBackend) initializeDB() (err error) {
-	d, err := iofs.New(migrationsFS, "migrations")
+	migrations, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
 		p.logger.Error("unable to run migrations", "error", err)
 		return
@@ -210,13 +210,13 @@ func (p *PgBackend) initializeDB() (err error) {
 		sslMode = "disable"
 	}
 
-	pqConnectionString := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s",
+	pqConnectionString := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s&x-migrations-table=neoq_schema_migrations",
 		pgxCfg.User,
 		pgxCfg.Password,
 		pgxCfg.Host,
 		pgxCfg.Database,
 		sslMode)
-	m, err := migrate.NewWithSourceInstance("iofs", d, pqConnectionString)
+	m, err := migrate.NewWithSourceInstance("iofs", migrations, pqConnectionString)
 	if err != nil {
 		p.logger.Error("unable to run migrations", "error", err)
 		return
