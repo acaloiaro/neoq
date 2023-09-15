@@ -24,7 +24,7 @@ func main() {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.New(queue, func(ctx context.Context) (err error) {
 		var j *jobs.Job
 		time.Sleep(1 * time.Second)
 		j, err = jobs.FromContext(ctx)
@@ -33,7 +33,7 @@ func main() {
 		return
 	})
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		log.Println("error listening to queue", err)
 	}

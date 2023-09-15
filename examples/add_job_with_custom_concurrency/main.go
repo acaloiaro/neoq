@@ -25,7 +25,7 @@ func main() {
 
 	// Concurrency and other options may be set on handlers both during creation (Option 1), or after the fact (Option 2)
 	// Option 1: add options when creating the handler
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.New(queue, func(ctx context.Context) (err error) {
 		var j *jobs.Job
 		j, err = jobs.FromContext(ctx)
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
@@ -36,7 +36,7 @@ func main() {
 	// Option 2: Set options after the handler is created
 	h.WithOptions(handler.Concurrency(8))
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		log.Println("error listening to queue", err)
 	}

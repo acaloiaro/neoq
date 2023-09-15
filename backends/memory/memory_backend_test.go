@@ -52,12 +52,12 @@ func TestBasicJobProcessing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	if err := nq.Start(ctx, queue, h); err != nil {
+	if err := nq.Start(ctx, h); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,12 +126,12 @@ func TestBackendConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		time.Sleep(100 * time.Millisecond)
 		return
 	}, handler.Concurrency(1), handler.MaxQueueCapacity(1))
 
-	if err := nq.Start(ctx, queue, h); err != nil {
+	if err := nq.Start(ctx, h); err != nil {
 		t.Fatal(err)
 	}
 
@@ -184,11 +184,11 @@ func TestFutureJobScheduling(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.New(queue, func(ctx context.Context) (err error) {
 		return
 	})
 
-	if err := nq.Start(ctx, queue, h); err != nil {
+	if err := nq.Start(ctx, h); err != nil {
 		t.Fatal(err)
 	}
 
@@ -232,7 +232,7 @@ func TestFutureJobSchedulingMultipleQueues(t *testing.T) {
 	done1 := make(chan bool)
 	done2 := make(chan bool)
 
-	h1 := handler.New(func(ctx context.Context) (err error) {
+	h1 := handler.New(q1, func(ctx context.Context) (err error) {
 		var j *jobs.Job
 		j, err = jobs.FromContext(ctx)
 		if err != nil {
@@ -247,7 +247,7 @@ func TestFutureJobSchedulingMultipleQueues(t *testing.T) {
 		return
 	})
 
-	h2 := handler.New(func(ctx context.Context) (err error) {
+	h2 := handler.New(q2, func(ctx context.Context) (err error) {
 		var j *jobs.Job
 		j, err = jobs.FromContext(ctx)
 		if err != nil {
@@ -262,11 +262,11 @@ func TestFutureJobSchedulingMultipleQueues(t *testing.T) {
 		return
 	})
 
-	if err := nq.Start(ctx, q1, h1); err != nil {
+	if err := nq.Start(ctx, h1); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := nq.Start(ctx, q2, h2); err != nil {
+	if err := nq.Start(ctx, h2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -339,7 +339,7 @@ func TestCron(t *testing.T) {
 	defer nq.Shutdown(ctx)
 
 	done := make(chan bool)
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.New("foobar", func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})

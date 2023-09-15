@@ -86,12 +86,12 @@ func TestBasicJobProcessing(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		t.Error(err)
 	}
@@ -143,22 +143,22 @@ func TestBasicJobMultipleQueue(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	h2 := handler.New(func(_ context.Context) (err error) {
+	h2 := handler.New(queue2, func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		t.Error(err)
 	}
 
-	err = nq.Start(ctx, queue2, h2)
+	err = nq.Start(ctx, h2)
 	if err != nil {
 		t.Error(err)
 	}
@@ -221,7 +221,7 @@ func TestStartCron(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.NewPeriodic(func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
@@ -268,7 +268,7 @@ func TestJobProcessingWithOptions(t *testing.T) {
 
 	nq.SetLogger(testutils.NewTestLogger(logsChan))
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		time.Sleep(50 * time.Millisecond)
 		return
 	})
@@ -277,7 +277,7 @@ func TestJobProcessingWithOptions(t *testing.T) {
 		handler.Concurrency(1),
 	)
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		t.Error(err)
 	}
@@ -334,13 +334,13 @@ func TestJobProcessingWithJobDeadline(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		time.Sleep(50 * time.Millisecond)
 		done <- true
 		return
 	})
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		t.Error(err)
 	}

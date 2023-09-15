@@ -89,7 +89,6 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, 
 
 	if job.Queue == "" {
 		err = jobs.ErrNoQueueSpecified
-
 		return
 	}
 
@@ -121,14 +120,14 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, 
 }
 
 // Start starts processing jobs with the specified queue and handler
-func (m *MemBackend) Start(ctx context.Context, queue string, h handler.Handler) (err error) {
+func (m *MemBackend) Start(ctx context.Context, h handler.Handler) (err error) {
 	queueCapacity := h.QueueCapacity
 	if queueCapacity == emptyCapacity {
 		queueCapacity = defaultMemQueueCapacity
 	}
 
-	m.handlers.Store(queue, h)
-	m.queues.Store(queue, make(chan *jobs.Job, queueCapacity))
+	m.handlers.Store(h.Queue, h)
+	m.queues.Store(h.Queue, make(chan *jobs.Job, queueCapacity))
 
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -136,7 +135,7 @@ func (m *MemBackend) Start(ctx context.Context, queue string, h handler.Handler)
 	m.cancelFuncs = append(m.cancelFuncs, cancel)
 	m.mu.Unlock()
 
-	err = m.start(ctx, queue)
+	err = m.start(ctx, h.Queue)
 	if err != nil {
 		return
 	}
@@ -164,8 +163,9 @@ func (m *MemBackend) StartCron(ctx context.Context, cronSpec string, h handler.H
 	m.mu.Lock()
 	m.cancelFuncs = append(m.cancelFuncs, cancel)
 	m.mu.Unlock()
+	h.Queue = queue
 
-	err = m.Start(ctx, queue, h)
+	err = m.Start(ctx, h)
 	if err != nil {
 		return fmt.Errorf("error processing queue '%s': %w", queue, err)
 	}
@@ -203,13 +203,12 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 
 	if ht, ok = m.handlers.Load(queue); !ok {
 		err = fmt.Errorf("%w: %s", handler.ErrNoHandlerForQueue, queue)
-		m.logger.Error("error loading handler for queue", queue)
+		m.logger.Error("error loading handler for queue", "queue", queue)
 		return
 	}
 
 	if qc, ok = m.queues.Load(queue); !ok {
-		err = fmt.Errorf("%w: %s", handler.ErrNoProcessorForQueue, queue)
-		m.logger.Error("error loading channel for queue", queue)
+		m.logger.Error("error loading channel for queue", "queue", queue, "error", handler.ErrNoHandlerForQueue)
 		return err
 	}
 

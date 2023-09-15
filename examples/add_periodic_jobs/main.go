@@ -18,7 +18,7 @@ func main() {
 	}
 
 	// run a job periodically
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.NewPeriodic(func(_ context.Context) (err error) {
 		log.Println("running periodic job")
 		return
 	})

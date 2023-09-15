@@ -46,7 +46,7 @@ Queue Handlers are simple Go functions that accept a `Context` parameter.
 ```go
 ctx := context.Background()
 nq, _ := neoq.New(ctx, neoq.WithBackend(memory.Backend))
-nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
+nq.Start(ctx, handler.New("greetings", func(ctx context.Context) (err error) {
   j, _ := jobs.FromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
   return
@@ -57,14 +57,14 @@ nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
 
 Enqueuing adds jobs to the specified queue to be processed asynchronously.
 
-**Example**: Add a "Hello World" job to the `hello_world` queue using the default in-memory backend.
+**Example**: Add a "Hello World" job to the `greetings` queue using the default in-memory backend.
 
 ```go
 ctx := context.Background()
 nq, _ := neoq.New(ctx, neoq.WithBackend(memory.Backend))
 nq.Enqueue(ctx, &jobs.Job{
-  Queue: "hello_world",
-  Payload: map[string]interface{}{
+  Queue: "greetings",
+  Payload: map[string]any{
     "message": "hello world",
   },
 })
@@ -72,7 +72,7 @@ nq.Enqueue(ctx, &jobs.Job{
 
 ## Redis
 
-**Example**: Process jobs on the "hello_world" queue and add a job to it using the redis backend
+**Example**: Process jobs on the "greetings" queue and add a job to it using the redis backend
 
 ```go
 ctx := context.Background()
@@ -81,14 +81,14 @@ nq, _ := neoq.New(ctx,
   redis.WithAddr("localhost:6379"),
   redis.WithPassword(""))
 
-nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
+nq.Start(ctx, handler.New("greetings", func(ctx context.Context) (err error) {
   j, _ := jobs.FromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
   return
 }))
 
 nq.Enqueue(ctx, &jobs.Job{
-  Queue: "hello_world",
+  Queue: "greetings",
   Payload: map[string]interface{}{
     "message": "hello world",
   },
@@ -97,7 +97,7 @@ nq.Enqueue(ctx, &jobs.Job{
 
 ## Postgres
 
-**Example**: Process jobs on the "hello_world" queue and add a job to it using the postgres backend
+**Example**: Process jobs on the "greetings" queue and add a job to it using the postgres backend
 
 ```go
 ctx := context.Background()
@@ -106,14 +106,14 @@ nq, _ := neoq.New(ctx,
   postgres.WithConnectionString("postgres://postgres:postgres@127.0.0.1:5432/neoq"),
 )
 
-nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
+nq.Start(ctx, handler.New("greetings", func(ctx context.Context) (err error) {
   j, _ := jobs.FromContext(ctx)
   log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
   return
 }))
 
 nq.Enqueue(ctx, &jobs.Job{
-  Queue: "hello_world",
+  Queue: "greetings",
   Payload: map[string]interface{}{
     "message": "hello world",
   },

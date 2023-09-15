@@ -305,18 +305,18 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 }
 
 // Start starts processing jobs with the specified queue and handler
-func (p *PgBackend) Start(ctx context.Context, queue string, h handler.Handler) (err error) {
+func (p *PgBackend) Start(ctx context.Context, h handler.Handler) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	p.logger.Debug("starting job processing", "queue", queue)
+	p.logger.Debug("starting job processing", "queue", h.Queue)
 	p.mu.Lock()
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
-	p.handlers[queue] = h
+	p.handlers[h.Queue] = h
 	p.mu.Unlock()
 
-	err = p.start(ctx, queue)
+	err = p.start(ctx, h)
 	if err != nil {
-		p.logger.Error("unable to start processing queue", "queue", queue, "error", err)
+		p.logger.Error("unable to start processing queue", "queue", h.Queue, "error", err)
 		return
 	}
 	return
@@ -339,8 +339,9 @@ func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Ha
 	}
 
 	queue := internal.StripNonAlphanum(strcase.ToSnake(*cdStr))
-	ctx, cancel := context.WithCancel(ctx)
+	h.Queue = queue
 
+	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
 	p.mu.Unlock()
@@ -358,7 +359,7 @@ func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Ha
 		return fmt.Errorf("error adding cron: %w", err)
 	}
 
-	return p.Start(ctx, queue, h)
+	return p.Start(ctx, h)
 }
 
 // SetLogger sets this backend's logger
@@ -505,24 +506,23 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 
 // start starts processing new, pending, and future jobs
 // nolint: cyclop
-func (p *PgBackend) start(ctx context.Context, queue string) (err error) {
-	var h handler.Handler
+func (p *PgBackend) start(ctx context.Context, h handler.Handler) (err error) {
 	var ok bool
 
-	if h, ok = p.handlers[queue]; !ok {
-		return fmt.Errorf("%w: %s", handler.ErrNoHandlerForQueue, queue)
+	if h, ok = p.handlers[h.Queue]; !ok {
+		return fmt.Errorf("%w: %s", handler.ErrNoHandlerForQueue, h.Queue)
 	}
 
-	listenJobChan, ready := p.listen(ctx, queue) // listen for 'new' jobs
+	listenJobChan, ready := p.listen(ctx, h.Queue) // listen for 'new' jobs
 	defer close(ready)
 
-	pendingJobsChan := p.pendingJobs(ctx, queue) // process overdue jobs *at startup*
+	pendingJobsChan := p.pendingJobs(ctx, h.Queue) // process overdue jobs *at startup*
 
 	// wait for the listener to connect and be ready to listen
 	<-ready
 
 	// process all future jobs and retries
-	go func() { p.scheduleFutureJobs(ctx, queue) }()
+	go func() { p.scheduleFutureJobs(ctx, h.Queue) }()
 
 	for i := 0; i < h.Concurrency; i++ {
 		go func() {
@@ -714,7 +714,7 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 	go func(ctx context.Context) {
 		conn, err := p.pool.Acquire(ctx)
 		if err != nil {
-			p.logger.Error("unable to acquire new listener connnection", err)
+			p.logger.Error("unable to acquire new listener connnection", "error", err)
 			return
 		}
 		defer p.release(ctx, conn, queue)
@@ -723,7 +723,7 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 		_, err = conn.Exec(ctx, fmt.Sprintf("SET idle_in_transaction_session_timeout = '0'; LISTEN %s", queue))
 		if err != nil {
 			err = fmt.Errorf("unable to configure listener connection: %w", err)
-			p.logger.Error("unable to configure listener connection", err)
+			p.logger.Error("unable to configure listener connection", "error", err)
 			return
 		}
 
@@ -737,7 +737,7 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 					return
 				}
 
-				p.logger.Error("failed to wait for notification", waitErr)
+				p.logger.Error("failed to wait for notification", "error", waitErr)
 				continue
 			}
 
