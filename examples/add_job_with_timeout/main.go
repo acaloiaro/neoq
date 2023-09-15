@@ -28,7 +28,7 @@ func main() {
 	// this is probably not a pattern you want to use in production jobs and you see it here only for testing reasons
 	done := make(chan bool)
 
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.New(queue, func(ctx context.Context) (err error) {
 		var j *jobs.Job
 		time.Sleep(1 * time.Second)
 		j, err = jobs.FromContext(ctx)
@@ -40,7 +40,7 @@ func main() {
 	// this 10ms timeout will cause our job that sleeps for 1s to fail
 	h.WithOptions(handler.JobTimeout(10 * time.Millisecond))
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		log.Println("error listening to queue", err)
 	}

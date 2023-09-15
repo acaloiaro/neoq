@@ -20,14 +20,14 @@ func main() {
 		log.Fatalf("error initializing postgres backend: %v", err)
 	}
 
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.New(queue, func(ctx context.Context) (err error) {
 		var j *jobs.Job
 		j, err = jobs.FromContext(ctx)
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
 		return
 	})
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		log.Println("error processing queue", err)
 	}

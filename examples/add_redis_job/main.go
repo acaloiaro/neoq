@@ -11,7 +11,6 @@ import (
 )
 
 func main() {
-
 	done := make(chan bool)
 	ctx := context.Background()
 	nq, _ := neoq.New(ctx,
@@ -20,7 +19,7 @@ func main() {
 		redis.WithPassword(""),
 	)
 
-	nq.Start(ctx, "hello_world", handler.New(func(ctx context.Context) (err error) {
+	nq.Start(ctx, handler.New("hello_world", func(ctx context.Context) (err error) {
 		j, _ := jobs.FromContext(ctx)
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
 		done <- true
