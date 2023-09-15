@@ -25,12 +25,12 @@ func main() {
 	// this is probably not a pattern you want to use in production jobs and you see it here only for testing reasons
 	done := make(chan bool)
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		<-done
 		return
 	})
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		log.Println("error listening to queue", err)
 	}

@@ -180,11 +180,6 @@ func WithShutdownTimeout(timeout time.Duration) neoq.ConfigOption {
 
 // Enqueue queues jobs to be executed asynchronously
 func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
-	if job.Queue == "" {
-		err = jobs.ErrNoQueueSpecified
-		return
-	}
-
 	err = jobs.FingerprintJob(job)
 	if err != nil {
 		return
@@ -205,8 +200,8 @@ func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string
 }
 
 // Start starts processing jobs with the specified queue and handler
-func (b *RedisBackend) Start(_ context.Context, queue string, h handler.Handler) (err error) {
-	b.mux.HandleFunc(queue, func(ctx context.Context, t *asynq.Task) (err error) {
+func (b *RedisBackend) Start(_ context.Context, h handler.Handler) (err error) {
+	b.mux.HandleFunc(h.Queue, func(ctx context.Context, t *asynq.Task) (err error) {
 		taskID := t.ResultWriter().TaskID()
 		var p map[string]any
 		if err = json.Unmarshal(t.Payload(), &p); err != nil {
@@ -226,7 +221,7 @@ func (b *RedisBackend) Start(_ context.Context, queue string, h handler.Handler)
 
 		job := &jobs.Job{
 			CreatedAt: time.Now().UTC(),
-			Queue:     queue,
+			Queue:     h.Queue,
 			Payload:   p,
 			Deadline:  &ti.Deadline,
 			RunAfter:  ti.NextProcessAt,
@@ -259,8 +254,9 @@ func (b *RedisBackend) StartCron(ctx context.Context, cronSpec string, h handler
 	}
 
 	queue := internal.StripNonAlphanum(strcase.ToSnake(*cdStr))
+	h.Queue = queue
 
-	err = b.Start(ctx, queue, h)
+	err = b.Start(ctx, h)
 	if err != nil {
 		return
 	}

@@ -30,6 +30,7 @@ type Handler struct {
 	Concurrency   int
 	JobTimeout    time.Duration
 	QueueCapacity int64
+	Queue         string
 }
 
 // Option is function that sets optional configuration for Handlers
@@ -67,10 +68,19 @@ func MaxQueueCapacity(capacity int64) Option {
 	}
 }
 
-// New creates a new queue handler
-func New(f Func, opts ...Option) (h Handler) {
+// Queue configures the name of the queue that the handler runs on
+func Queue(queue string) Option {
+	return func(h *Handler) {
+		h.Queue = queue
+	}
+}
+
+// New creates new queue handlers for specific queues. This function is to be usued to create new Handlers for
+// non-periodic jobs (most jobs). Use [NewPeriodic] to initialize handlers for periodic jobs.
+func New(queue string, f Func, opts ...Option) (h Handler) {
 	h = Handler{
 		Handle: f,
+		Queue:  queue,
 	}
 
 	h.WithOptions(opts...)
@@ -88,13 +98,20 @@ func New(f Func, opts ...Option) (h Handler) {
 	return
 }
 
+// NewPeriodic creates new queue handlers for periodic jobs.  Use [New] to initialize handlers for non-periodic jobs.
+func NewPeriodic(f Func, opts ...Option) (h Handler) {
+	h = New("", f, opts...)
+	return
+}
+
 // Exec executes handler functions with a concrete timeout
 func Exec(ctx context.Context, handler Handler) (err error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, handler.JobTimeout)
 	defer cancel()
 
-	var errCh = make(chan error, 1)
-	var done = make(chan bool)
+	errCh := make(chan error, 1)
+	done := make(chan bool)
+
 	go func(ctx context.Context) {
 		defer func() {
 			if x := recover(); x != nil {

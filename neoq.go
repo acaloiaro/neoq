@@ -63,8 +63,8 @@ type Neoq interface {
 	// Enqueue queues jobs to be executed asynchronously
 	Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error)
 
-	// Start starts processing jobs with the specified queue and handler
-	Start(ctx context.Context, queue string, h handler.Handler) (err error)
+	// Start starts processing jobs on the queue specified in the Handler
+	Start(ctx context.Context, h handler.Handler) (err error)
 
 	// StartCron starts processing jobs with the specified cron schedule and handler
 	//

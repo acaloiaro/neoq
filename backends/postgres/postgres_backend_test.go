@@ -70,19 +70,19 @@ func TestBasicJobProcessing(t *testing.T) {
 		return
 	}
 
-	ctx := context.TODO()
+	ctx := context.Background()
 	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		t.Error(err)
 	}
@@ -184,22 +184,22 @@ func TestBasicJobMultipleQueue(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	h2 := handler.New(func(_ context.Context) (err error) {
+	h2 := handler.New(queue2, func(_ context.Context) (err error) {
 		done <- true
 		return
 	})
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		t.Error(err)
 	}
 
-	err = nq.Start(ctx, queue2, h2)
+	err = nq.Start(ctx, h2)
 	if err != nil {
 		t.Error(err)
 	}
@@ -264,7 +264,7 @@ func TestCron(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.NewPeriodic(func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})
@@ -318,14 +318,14 @@ func TestBasicJobProcessingWithErrors(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(_ context.Context) (err error) {
+	h := handler.New(queue, func(_ context.Context) (err error) {
 		err = errors.New("something bad happened") // nolint: goerr113
 		return
 	})
 
 	nq.SetLogger(testutils.NewTestLogger(logsChan))
 
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		t.Error(err)
 	}

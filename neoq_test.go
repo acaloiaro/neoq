@@ -102,7 +102,7 @@ func TestStart(t *testing.T) {
 	}
 	defer nq.Shutdown(ctx)
 
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.New(queue, func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})
@@ -112,7 +112,7 @@ func TestStart(t *testing.T) {
 	)
 
 	// process jobs on the test queue
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		t.Error(err)
 	}
@@ -165,7 +165,7 @@ func TestStartCron(t *testing.T) {
 	defer nq.Shutdown(ctx)
 
 	done := make(chan bool)
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.NewPeriodic(func(ctx context.Context) (err error) {
 		done <- true
 		return
 	})
@@ -208,14 +208,14 @@ func TestSetLogger(t *testing.T) {
 
 	nq.SetLogger(testutils.NewTestLogger(logsChan))
 
-	h := handler.New(func(ctx context.Context) (err error) {
+	h := handler.New(queue, func(ctx context.Context) (err error) {
 		err = errTrigger
 		return
 	})
 	if err != nil {
 		t.Error(err)
 	}
-	err = nq.Start(ctx, queue, h)
+	err = nq.Start(ctx, h)
 	if err != nil {
 		t.Error(err)
 	}
