@@ -31,9 +31,7 @@ import (
 var migrationsFS embed.FS
 
 const (
-	postgresBackendName       = "postgres"
-	DefaultPgConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/neoq?sslmode=disable"
-	PendingJobIDQuery         = `SELECT id
+	PendingJobIDQuery = `SELECT id
 					FROM neoq_jobs
 					WHERE queue = $1
 					AND status NOT IN ('processed')
