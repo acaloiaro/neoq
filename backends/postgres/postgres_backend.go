@@ -233,6 +233,11 @@ func (p *PgBackend) initializeDB() (err error) {
 
 // Enqueue adds jobs to the specified queue
 func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
+	if job.Queue == "" {
+		err = jobs.ErrNoQueueSpecified
+		return
+	}
+
 	p.logger.Debug("enqueueing job payload", slog.Any("job_payload", job.Payload))
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
@@ -264,11 +269,6 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 	if job.RunAfter.IsZero() {
 		p.logger.Debug("RunAfter not set, job will run immediately after being enqueued")
 		job.RunAfter = now
-	}
-
-	if job.Queue == "" {
-		err = jobs.ErrNoQueueSpecified
-		return
 	}
 
 	jobID, err = p.enqueueJob(ctx, tx, job)
