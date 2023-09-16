@@ -181,7 +181,7 @@ func (m *MemBackend) StartCron(ctx context.Context, cronSpec string, h handler.H
 		return fmt.Errorf("error adding cron: %w", err)
 	}
 
-	return
+	return err
 }
 
 // SetLogger sets this backend's logger
