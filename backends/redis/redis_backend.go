@@ -180,6 +180,11 @@ func WithShutdownTimeout(timeout time.Duration) neoq.ConfigOption {
 
 // Enqueue queues jobs to be executed asynchronously
 func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
+	if job.Queue == "" {
+		err = jobs.ErrNoQueueSpecified
+		return
+	}
+
 	err = jobs.FingerprintJob(job)
 	if err != nil {
 		return

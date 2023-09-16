@@ -72,6 +72,11 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, 
 	var qc any
 	var ok bool
 
+	if job.Queue == "" {
+		err = jobs.ErrNoQueueSpecified
+		return
+	}
+
 	m.logger.Debug("adding a new job", "queue", job.Queue)
 
 	if qc, ok = m.queues.Load(job.Queue); !ok {
