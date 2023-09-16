@@ -226,13 +226,12 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 		go func() {
 			var err error
 			var job *jobs.Job
-
 			for {
 				select {
 				case job = <-queueChan:
 					err = m.handleJob(ctx, job, h)
 				case <-ctx.Done():
-					return
+					err = ctx.Err()
 				}
 
 				if err != nil {
