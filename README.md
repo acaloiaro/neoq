@@ -4,9 +4,9 @@ Background job processing for Go
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/acaloiaro/neoq.svg)](https://pkg.go.dev/github.com/acaloiaro/neoq) [![Gitter chat](https://badges.gitter.im/gitterHQ/gitter.png)](https://app.gitter.im/#/room/#neoq:gitter.im)
 
-# Usage
+# Getting Started 
 
-`go get -u github.com/acaloiaro/neoq`
+See the [Getting Started](https://github.com/acaloiaro/neoq/wiki/Getting-Started) wiki to get started. 
 
 # About
 
