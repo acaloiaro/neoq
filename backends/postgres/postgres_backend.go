@@ -239,10 +239,6 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 	}
 
 	p.logger.Debug("enqueueing job payload", slog.Any("job_payload", job.Payload))
-	ctx, cancel := context.WithCancel(ctx)
-	p.mu.Lock()
-	p.cancelFuncs = append(p.cancelFuncs, cancel)
-	p.mu.Unlock()
 
 	p.logger.Debug("acquiring new connection from connection pool")
 	conn, err := p.pool.Acquire(ctx)
