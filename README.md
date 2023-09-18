@@ -10,7 +10,7 @@ See the [Getting Started](https://github.com/acaloiaro/neoq/wiki/Getting-Started
 
 # About
 
-Neoq is a queue-agnostic background job framework for Go, with a pleasant API and powerful features.
+Neoq is a queue-agnostic background job library for Go, with a pleasant API and powerful features.
 
 Queue-agnostic means that whether you're using an in-memory queue for developing and testing, or Postgres or Redis queue in production -- your job processing code doesn't change. Job handlers are agnostic to the queue providing jobs. It also means that you can mix queue types within a single application. If you have ephemeral or periodic tasks, you may want to process them in an in-memory queue, and use Postgres or Redis queues for jobs requiring queue durability.
 
