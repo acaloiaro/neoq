@@ -204,25 +204,27 @@ func TestBasicJobMultipleQueue(t *testing.T) {
 		t.Error(err)
 	}
 
-	jid, e := nq.Enqueue(ctx, &jobs.Job{
-		Queue: queue,
-		Payload: map[string]interface{}{
-			"message": fmt.Sprintf("hello world: %d", internal.RandInt(10000000000)),
-		},
-	})
-	if e != nil || jid == jobs.DuplicateJobID {
-		t.Error(e)
-	}
+	go func() {
+		jid, e := nq.Enqueue(ctx, &jobs.Job{
+			Queue: queue,
+			Payload: map[string]interface{}{
+				"message": fmt.Sprintf("hello world: %d", internal.RandInt(10000000000)),
+			},
+		})
+		if e != nil || jid == jobs.DuplicateJobID {
+			t.Error(e)
+		}
 
-	jid2, e := nq.Enqueue(ctx, &jobs.Job{
-		Queue: queue2,
-		Payload: map[string]interface{}{
-			"message": fmt.Sprintf("hello world: %d", internal.RandInt(10000000000)),
-		},
-	})
-	if e != nil || jid2 == jobs.DuplicateJobID {
-		t.Error(e)
-	}
+		jid2, e := nq.Enqueue(ctx, &jobs.Job{
+			Queue: queue2,
+			Payload: map[string]interface{}{
+				"message": fmt.Sprintf("hello world: %d", internal.RandInt(10000000000)),
+			},
+		})
+		if e != nil || jid2 == jobs.DuplicateJobID {
+			t.Error(e)
+		}
+	}()
 
 results_loop:
 	for {
