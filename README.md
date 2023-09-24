@@ -41,7 +41,7 @@ Queue handlers listen for Jobs on queues. Jobs may consist of any payload that i
 
 Queue Handlers are simple Go functions that accept a `Context` parameter.
 
-**Example**: Add a listener on the `hello_world` queue using the default in-memory backend
+**Example**: Add a listener on the `greetings` queue using the default in-memory backend
 
 ```go
 ctx := context.Background()
