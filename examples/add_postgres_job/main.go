@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"time"
 
 	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/backends/postgres"
@@ -26,7 +25,6 @@ func main() {
 
 	h := handler.New(queue, func(ctx context.Context) (err error) {
 		var j *jobs.Job
-		time.Sleep(1 * time.Second)
 		j, err = jobs.FromContext(ctx)
 		log.Println("got job id:", j.ID, "messsage:", j.Payload["message"])
 		done <- true
@@ -38,7 +36,6 @@ func main() {
 		log.Println("error listening to queue", err)
 	}
 
-	// Add a job that will execute 1 hour from now
 	jobID, err := nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
