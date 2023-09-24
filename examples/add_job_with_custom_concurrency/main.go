@@ -41,7 +41,6 @@ func main() {
 		log.Println("error listening to queue", err)
 	}
 
-	// enqueue a job
 	_, err = nq.Enqueue(ctx, &jobs.Job{
 		Queue: queue,
 		Payload: map[string]interface{}{
