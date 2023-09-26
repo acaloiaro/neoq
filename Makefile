@@ -14,7 +14,7 @@ fmt:
 
 .PHONY: vet
 vet:
-	@go vet ./...
+	@go vet -tags testing ./...
 
 .PHONY: test
 test: install-gotestsum
