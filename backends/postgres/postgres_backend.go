@@ -149,6 +149,10 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 				// there is no limit to the amount of time a worker's transactions may be idle
 				query = setIdleInTxSessionTimeout
 			}
+
+			if !p.config.SynchronousCommit {
+				query = fmt.Sprintf("%s; SET synchronous_commit = 'off';", query)
+			}
 			_, err = conn.Exec(ctx, query)
 			return
 		}
@@ -181,6 +185,24 @@ func WithConnectionString(connectionString string) neoq.ConfigOption {
 func WithTransactionTimeout(txTimeout int) neoq.ConfigOption {
 	return func(c *neoq.Config) {
 		c.IdleTransactionTimeout = txTimeout
+	}
+}
+
+// WithSynchronousCommit enables postgres parameter `synchronous_commit`.
+//
+// By default, neoq runs with synchronous_commit disabled.
+//
+// Postgres incurrs significant transactional overhead from synchronously committing small transactions. Because
+// neoq jobs must be enqueued individually, and payloads are generally quite small, synchronous_commit introduces
+// significant overhead, but increases data durability.
+//
+// See https://www.postgresql.org/docs/current/wal-async-commit.html for details on the implications that this has for
+// neoq jobs.
+//
+// Enabling synchronous commit results in an order of magnitude slowdown in enqueueing and processing jobs.
+func WithSynchronousCommit(enabled bool) neoq.ConfigOption {
+	return func(c *neoq.Config) {
+		c.SynchronousCommit = enabled
 	}
 }
 
