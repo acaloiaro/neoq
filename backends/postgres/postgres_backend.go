@@ -133,7 +133,7 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 		return
 	}
 
-	if p.pool == nil {
+	if p.pool == nil { //nolint: nestif
 		var poolConfig *pgxpool.Config
 		poolConfig, err = pgxpool.ParseConfig(p.config.ConnectionString)
 		if err != nil || p.config.ConnectionString == "" {
@@ -419,9 +419,9 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (job
 	}
 
 	p.logger.Debug("adding job to the queue")
-	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline).Scan(&jobID)
+	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
 	if err != nil {
 		err = fmt.Errorf("unable add job to queue: %w", err)
 		return
@@ -480,7 +480,7 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 		return fmt.Errorf("error getting tx from context: %w", err)
 	}
 
-	if job.Retries >= job.MaxRetries {
+	if job.MaxRetries != nil && job.Retries >= *job.MaxRetries {
 		err = p.moveToDeadQueue(ctx, tx, job, jobErr)
 		return
 	}

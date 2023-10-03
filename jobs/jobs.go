@@ -42,7 +42,7 @@ type Job struct {
 	RanAt       null.Time      `db:"ran_at"`      // The last time the job ran
 	Error       null.String    `db:"error"`       // The last error the job elicited
 	Retries     int            `db:"retries"`     // The number of times the job has retried
-	MaxRetries  int            `db:"max_retries"` // The maximum number of times the job can retry
+	MaxRetries  *int           `db:"max_retries"` // The maximum number of times the job can retry
 	CreatedAt   time.Time      `db:"created_at"`  // The time the job was created
 }
 

@@ -18,10 +18,13 @@ import (
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/testutils"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
+var (
+	errPeriodicTimeout = errors.New("timed out waiting for periodic job")
+	conn               *pgxpool.Pool
+)
 
 func flushDB() {
 	ctx := context.Background()
@@ -30,7 +33,16 @@ func flushDB() {
 		return
 	}
 
-	conn, err := pgx.Connect(context.Background(), dbURL)
+	var err error
+	var poolConfig *pgxpool.Config
+	poolConfig, err = pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unable to parse database url: '%s': %v", dbURL, err)
+		return
+	}
+	poolConfig.MaxConns = 2
+
+	conn, err = pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		// an error was encountered connecting to the db. this may simply mean that we're running tests against an
 		// uninitialized database and the database needs to be created. By creating a new pg backend instance with
@@ -43,7 +55,6 @@ func flushDB() {
 			return
 		}
 	}
-	defer conn.Close(context.Background())
 
 	_, err = conn.Query(context.Background(), "DELETE FROM neoq_jobs") // nolint: gocritic
 	if err != nil {
@@ -61,6 +72,7 @@ func TestMain(m *testing.M) {
 // most basic configuration.
 func TestBasicJobProcessing(t *testing.T) {
 	const queue = "testing"
+	maxRetries := 5
 	done := make(chan bool)
 	defer close(done)
 
@@ -95,7 +107,8 @@ func TestBasicJobProcessing(t *testing.T) {
 		Payload: map[string]interface{}{
 			"message": "hello world",
 		},
-		Deadline: &deadline,
+		Deadline:   &deadline,
+		MaxRetries: &maxRetries,
 	})
 	if e != nil || jid == jobs.DuplicateJobID {
 		t.Error(e)
@@ -106,9 +119,30 @@ func TestBasicJobProcessing(t *testing.T) {
 		err = jobs.ErrJobTimeout
 	case <-done:
 	}
-
 	if err != nil {
 		t.Error(err)
+	}
+
+	// ensure job has fields set correctly
+	var jdl time.Time
+	var jmxrt int
+
+	err = conn.
+		QueryRow(context.Background(), "SELECT deadline,max_retries FROM neoq_jobs WHERE id = $1", jid).
+		Scan(&jdl, &jmxrt)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jdl = jdl.In(time.UTC)
+	// dates from postgres come out with only 6 decimal places of millisecond precision, naively format dates as
+	// strings for comparison reasons. Ref https://www.postgresql.org/docs/current/datatype-datetime.html
+	if jdl.Format(time.RFC3339) != deadline.Format(time.RFC3339) {
+		t.Error(fmt.Errorf("job deadline does not match its expected value: %v != %v", jdl, deadline)) // nolint: goerr113
+	}
+
+	if jmxrt != maxRetries {
+		t.Error(fmt.Errorf("job MaxRetries does not match its expected value: %v != %v", jmxrt, maxRetries)) // nolint: goerr113
 	}
 
 	t.Cleanup(func() {
