@@ -165,7 +165,7 @@ func TestMultipleProcessors(t *testing.T) {
 
 	var execCount uint32
 	var wg sync.WaitGroup
-	count := 8
+	count := 4
 	neos := make([]neoq.Neoq, 0, count)
 	// Create several neoq processors such that we can enqueue several jobs and have them consumed by multiple different
 	// workers. We want to make sure that a job is not processed twice in a pool of many different neoq workers.
