@@ -14,10 +14,11 @@ import (
 )
 
 var (
-	ErrContextHasNoJob     = errors.New("context has no Job")
-	ErrJobTimeout          = errors.New("timed out waiting for job(s)")
-	ErrNoQueueSpecified    = errors.New("this job does not specify a queue. please specify a queue")
-	ErrJobExceededDeadline = errors.New("the job did not complete before its deadline")
+	ErrContextHasNoJob       = errors.New("context has no Job")
+	ErrJobTimeout            = errors.New("timed out waiting for job(s)")
+	ErrNoQueueSpecified      = errors.New("this job does not specify a queue. please specify a queue")
+	ErrJobExceededDeadline   = errors.New("the job did not complete before its deadline")
+	ErrJobExceededMaxRetries = errors.New("the job has exceeded the maximum number of retries")
 )
 
 const (

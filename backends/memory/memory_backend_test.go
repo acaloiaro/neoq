@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
+	"github.com/acaloiaro/neoq/testutils"
 	"github.com/pkg/errors"
 	"github.com/robfig/cron"
 	"golang.org/x/exp/slog"
@@ -23,7 +25,10 @@ const (
 	queue = "testing"
 )
 
-var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
+var (
+	errPeriodicTimeout = errors.New("timed out waiting for periodic job")
+	errTimeout         = errors.New("the test has timed out")
+)
 
 func ExampleNew() {
 	ctx := context.Background()
@@ -361,6 +366,61 @@ func TestCron(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		err = errPeriodicTimeout
 	case <-done:
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func TestMaxRetries(t *testing.T) {
+	const queue = "foobar"
+	maxRetries := 0
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend), neoq.WithLogLevel(logging.LogLevelDebug))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	logChan := make(chan string, 1)
+	nq.SetLogger(testutils.NewTestLogger(logChan))
+
+	h := handler.New(queue, func(ctx context.Context) (err error) {
+		panic("i refuse success!")
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// allow time for listener to start
+	time.Sleep(5 * time.Millisecond)
+
+	_, err = nq.Enqueue(ctx, &jobs.Job{
+		Queue:      queue,
+		Payload:    map[string]any{},
+		MaxRetries: &maxRetries,
+	})
+	if err != nil {
+		t.Error(err)
+	}
+
+	timeoutTimer := time.After(5 * time.Second)
+
+result_loop:
+	for {
+		select {
+		case <-timeoutTimer:
+			err = errTimeout
+			break result_loop
+		case newLog := <-logChan:
+			if strings.Contains(newLog, "job exceeded max retries") {
+				break result_loop
+			}
+		}
 	}
 
 	if err != nil {
