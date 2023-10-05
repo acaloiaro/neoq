@@ -77,6 +77,10 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, 
 		return
 	}
 
+	if job.Status == "" {
+		job.Status = internal.JobStatusNew
+	}
+
 	m.logger.Debug("adding a new job", "queue", job.Queue)
 
 	if qc, ok = m.queues.Load(job.Queue); !ok {
@@ -199,6 +203,7 @@ func (m *MemBackend) Shutdown(ctx context.Context) {
 }
 
 // start starts a processor that handles new incoming jobs and future jobs
+// nolint: cyclop
 func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 	var queueChan chan *jobs.Job
 	var qc any
@@ -230,18 +235,23 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 				select {
 				case job = <-queueChan:
 					err = m.handleJob(ctx, job, h)
+					job.Status = internal.JobStatusProcessed
 				case <-ctx.Done():
 					err = ctx.Err()
 				}
 
 				if err != nil {
-					if errors.Is(err, context.Canceled) {
+					if errors.Is(err, context.Canceled) ||
+						errors.Is(err, jobs.ErrJobExceededDeadline) ||
+						errors.Is(err, jobs.ErrJobExceededMaxRetries) {
 						return
 					}
 
-					m.logger.Error("job failed", "error", err, "job_id", job.ID)
+					m.logger.Error("job failed", "job_id", job.ID, "error", err)
+
 					runAfter := internal.CalculateBackoff(job.Retries)
 					job.RunAfter = runAfter
+					job.Status = internal.JobStatusFailed
 					m.queueFutureJob(job)
 				}
 
@@ -276,7 +286,7 @@ func (m *MemBackend) scheduleFutureJobs(ctx context.Context) {
 			timeUntilRunAfter := time.Until(job.RunAfter)
 			if timeUntilRunAfter <= m.config.FutureJobWindow {
 				m.removeFutureJob(job.ID)
-				m.logger.Debug("dequeued future job", "id", job.ID, "queue", job.Queue)
+				m.logger.Debug("dequeued job", "queue", job.Queue, "retries", job.Retries, "next_run", timeUntilRunAfter, "job_id", job.ID)
 				go func(j *jobs.Job) {
 					scheduleCh := time.After(timeUntilRunAfter)
 					<-scheduleCh
@@ -304,13 +314,14 @@ func (m *MemBackend) scheduleFutureJobs(ctx context.Context) {
 func (m *MemBackend) handleJob(ctx context.Context, job *jobs.Job, h handler.Handler) (err error) {
 	ctx = withJobContext(ctx, job)
 
-	// check if the job is being retried and increment retry count accordingly
+	m.logger.Debug("handling job", "status", job.Status, "retries", job.Retries, "job_id", job.ID)
+
 	if job.Status != internal.JobStatusNew {
 		job.Retries++
 	}
 
 	if job.Deadline != nil && job.Deadline.UTC().Before(time.Now().UTC()) {
-		m.logger.Debug("job deadline is in the past, skipping", "job_id", job.ID)
+		m.logger.Debug("job deadline is in the past, skipping", "deadline", job.Deadline, "job_id", job.ID)
 		err = jobs.ErrJobExceededDeadline
 		return
 	}
@@ -320,7 +331,17 @@ func (m *MemBackend) handleJob(ctx context.Context, job *jobs.Job, h handler.Han
 		job.Error = null.StringFrom(err.Error())
 	}
 
-	return
+	if err != nil {
+		job.Error = null.StringFrom(err.Error())
+		job.Status = internal.JobStatusFailed
+	}
+
+	if job.MaxRetries != nil && job.Retries >= *job.MaxRetries {
+		m.logger.Debug("job exceeded max retries", "retries", job.Retries, "max_retries", *job.MaxRetries, "job_id", job.ID)
+		err = jobs.ErrJobExceededMaxRetries
+	}
+
+	return err
 }
 
 // queueFutureJob queues a future job for eventual execution
