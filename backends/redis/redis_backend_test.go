@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"testing"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
+	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/testutils"
 	"github.com/hibiken/asynq"
 )
@@ -20,6 +20,11 @@ import (
 const (
 	queue  = "testing"
 	queue2 = "testing2"
+)
+
+var (
+	errTimeout     = errors.New("the test has timed out")
+	asynqInspector *asynq.Inspector
 )
 
 func init() {
@@ -34,29 +39,29 @@ func init() {
 	if password != "" {
 		clientOpt.Password = password
 	}
-	inspector := asynq.NewInspector(clientOpt)
-	queues, err := inspector.Queues()
+	asynqInspector = asynq.NewInspector(clientOpt)
+	queues, err := asynqInspector.Queues()
 	if err != nil {
 		panic(err)
 	}
 
 	for _, queue := range queues {
-		_, err = inspector.DeleteAllPendingTasks(queue)
+		_, err = asynqInspector.DeleteAllPendingTasks(queue)
 		if err != nil {
 			panic(err)
 		}
 
-		_, err = inspector.DeleteAllCompletedTasks(queue)
+		_, err = asynqInspector.DeleteAllCompletedTasks(queue)
 		if err != nil {
 			panic(err)
 		}
 
-		_, err = inspector.DeleteAllRetryTasks(queue)
+		_, err = asynqInspector.DeleteAllRetryTasks(queue)
 		if err != nil {
 			panic(err)
 		}
 
-		_, err = inspector.DeleteAllArchivedTasks(queue)
+		_, err = asynqInspector.DeleteAllArchivedTasks(queue)
 		if err != nil {
 			panic(err)
 		}
@@ -110,7 +115,6 @@ func TestBasicJobProcessing(t *testing.T) {
 	case <-timeoutTimer:
 		err = jobs.ErrJobTimeout
 	case <-done:
-		log.Println("DONE")
 	}
 
 	if err != nil {
@@ -362,6 +366,75 @@ func TestJobProcessingWithJobDeadline(t *testing.T) {
 		err = nil
 	case <-done:
 		err = errors.New("job should not have completed, but did") //nolint:all
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func TestMaxRetries(t *testing.T) {
+	const queue = "foobar"
+	maxRetries := 0
+	ctx := context.Background()
+	connString := os.Getenv("TEST_REDIS_URL")
+	if connString == "" {
+		t.Skip("Skipping: TEST_REDIS_URL not set")
+		return
+	}
+
+	password := os.Getenv("REDIS_PASSWORD")
+	nq, err := neoq.New(
+		ctx,
+		neoq.WithBackend(Backend),
+		neoq.WithLogLevel(logging.LogLevelDebug),
+		WithAddr(connString),
+		WithPassword(password),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(ctx context.Context) (err error) {
+		panic("i refuse success!")
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// allow time for listener to start
+	time.Sleep(5 * time.Millisecond)
+
+	var taskID string
+	taskID, err = nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]any{
+			"message": fmt.Sprintf("hello world: %d", internal.RandInt(10000000000)),
+		},
+		MaxRetries: &maxRetries,
+	})
+	if err != nil {
+		t.Error(err)
+	}
+
+	timeoutTimer := time.After(5 * time.Second)
+result_loop:
+	for {
+		select {
+		case <-timeoutTimer:
+			err = errTimeout
+			break result_loop
+		default:
+			ti, _ := asynqInspector.GetTaskInfo(defaultAsynqQueue, taskID)
+			if ti.State == asynq.TaskStateArchived && ti.Retried == maxRetries {
+				break result_loop
+			}
+
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 
 	if err != nil {
