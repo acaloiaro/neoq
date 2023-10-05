@@ -218,18 +218,26 @@ func (b *RedisBackend) Start(_ context.Context, h handler.Handler) (err error) {
 			b.logger.Error("unable to process job", "error", err)
 			return
 		}
+
 		if !ti.Deadline.IsZero() && ti.Deadline.UTC().Before(time.Now().UTC()) {
 			err = jobs.ErrJobExceededDeadline
 			b.logger.Debug("job deadline is in the past, skipping", "task_id", taskID)
 			return
 		}
 
+		if ti.Retried >= ti.MaxRetry {
+			err = jobs.ErrJobExceededMaxRetries
+			b.logger.Debug("job has exceeded the maximum number of retries, skipping", "task_id", taskID)
+			return
+		}
+
 		job := &jobs.Job{
-			CreatedAt: time.Now().UTC(),
-			Queue:     h.Queue,
-			Payload:   p,
-			Deadline:  &ti.Deadline,
-			RunAfter:  ti.NextProcessAt,
+			CreatedAt:  time.Now().UTC(),
+			Queue:      h.Queue,
+			Payload:    p,
+			Deadline:   &ti.Deadline,
+			MaxRetries: &ti.MaxRetry,
+			RunAfter:   ti.NextProcessAt,
 		}
 
 		ctx = withJobContext(ctx, job)
@@ -286,6 +294,10 @@ func jobToTaskOptions(job *jobs.Job) (opts []asynq.Option) {
 
 	if job.Deadline != nil {
 		opts = append(opts, asynq.Deadline(*job.Deadline))
+	}
+
+	if job.MaxRetries != nil {
+		opts = append(opts, asynq.MaxRetry(*job.MaxRetries))
 	}
 
 	return
