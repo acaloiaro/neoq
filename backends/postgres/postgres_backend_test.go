@@ -213,7 +213,7 @@ func TestMultipleProcessors(t *testing.T) {
 	wg.Wait()
 
 	// Make sure that we executed the expected number of jobs.
-	if execCount != uint32(ConcurrentWorkers) {
+	if atomic.LoadUint32(&execCount) != uint32(ConcurrentWorkers) {
 		t.Fatalf("mismatch number of executions. Expected: %d Found: %d", ConcurrentWorkers, execCount)
 	}
 }
@@ -429,11 +429,11 @@ func TestMultipleCronNodes(t *testing.T) {
 
 	// allow time for listener to start and for at least one job to process
 	time.Sleep(WaitForJobTime)
-	if jobsCompleted == 0 {
+	if atomic.LoadUint32(&jobsCompleted) == 0 {
 		t.Fatalf("no jobs were completed after %v", WaitForJobTime)
 	}
 
-	if duplicateJobs > 0 {
+	if atomic.LoadUint32(&duplicateJobs) > 0 {
 		t.Fatalf("some jobs were processed more than once")
 	}
 }
