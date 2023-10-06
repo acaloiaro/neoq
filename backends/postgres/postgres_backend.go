@@ -779,6 +779,7 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 
 		for {
 			notification, waitErr := conn.Conn().WaitForNotification(ctx)
+			p.logger.Debug("job notification for queue", "queue", queue, "notification", notification)
 			if waitErr != nil {
 				if errors.Is(waitErr, context.Canceled) {
 					return
