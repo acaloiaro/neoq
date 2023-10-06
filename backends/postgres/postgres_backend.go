@@ -649,7 +649,7 @@ func (p *PgBackend) announceJob(ctx context.Context, queue, jobID string) {
 	defer func(ctx context.Context) { _ = tx.Rollback(ctx) }(ctx)
 
 	// notify listeners that a job is ready to run
-	_, err = tx.Exec(ctx, fmt.Sprintf("NOTIFY %s, '%s'", queue, jobID))
+	_, err = tx.Exec(ctx, fmt.Sprintf(`SELECT pg_notify('%s', '%s')`, queue, jobID))
 	if err != nil {
 		return
 	}
@@ -761,13 +761,13 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 	go func(ctx context.Context) {
 		conn, err := p.pool.Acquire(ctx)
 		if err != nil {
-			p.logger.Error("unable to acquire new listener connnection", "queue", queue, "error", err)
+			p.logger.Error("unable to acquire new listener connection", "queue", queue, "error", err)
 			return
 		}
 		defer p.release(ctx, conn, queue)
 
 		// set this connection's idle in transaction timeout to infinite so it is not intermittently disconnected
-		_, err = conn.Exec(ctx, fmt.Sprintf("SET idle_in_transaction_session_timeout = '0'; LISTEN %s", queue))
+		_, err = conn.Exec(ctx, fmt.Sprintf(`SET idle_in_transaction_session_timeout = '0'; LISTEN %q`, queue))
 		if err != nil {
 			err = fmt.Errorf("unable to configure listener connection: %w", err)
 			p.logger.Error("unable to configure listener connection", "queue", queue, "error", err)
@@ -779,7 +779,7 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 
 		for {
 			notification, waitErr := conn.Conn().WaitForNotification(ctx)
-			p.logger.Debug("job notification for queue", "queue", queue, "notification", notification)
+			p.logger.Debug("job notification for queue", "queue", queue, "notification", notification, "err", err)
 			if waitErr != nil {
 				if errors.Is(waitErr, context.Canceled) {
 					return
@@ -802,7 +802,7 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 }
 
 func (p *PgBackend) release(ctx context.Context, conn *pgxpool.Conn, queue string) {
-	query := fmt.Sprintf("SET idle_in_transaction_session_timeout = '%d'; UNLISTEN %s", p.config.IdleTransactionTimeout, queue)
+	query := fmt.Sprintf("SET idle_in_transaction_session_timeout = '%d'; UNLISTEN %q", p.config.IdleTransactionTimeout, queue)
 	_, err := conn.Exec(ctx, query)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
