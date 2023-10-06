@@ -575,7 +575,7 @@ func (p *PgBackend) start(ctx context.Context, h handler.Handler) (err error) {
 func (p *PgBackend) initFutureJobs(ctx context.Context, queue string) (err error) {
 	rows, err := p.pool.Query(ctx, FutureJobQuery, queue)
 	if err != nil {
-		p.logger.Error("failed to fetch future jobs list", "queue", queue, err)
+		p.logger.Error("failed to fetch future jobs list", "queue", queue, "error", err)
 		return
 	}
 
