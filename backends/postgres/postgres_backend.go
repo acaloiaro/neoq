@@ -369,7 +369,7 @@ func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Ha
 	if err = p.cron.AddFunc(cronSpec, func() {
 		_, err := p.Enqueue(ctx, &jobs.Job{Queue: queue})
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) || errors.Is(err, ErrDuplicateJob) {
 				return
 			}
 
