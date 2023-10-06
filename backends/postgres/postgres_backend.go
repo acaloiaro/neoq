@@ -279,9 +279,9 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 		return
 	}
 
-	p.logger.Debug("enqueueing job payload", slog.Any("job_payload", job.Payload))
+	p.logger.Debug("enqueueing job payload", "queue", job.Queue, slog.Any("job_payload", job.Payload))
 
-	p.logger.Debug("acquiring new connection from connection pool")
+	p.logger.Debug("acquiring new connection from connection pool", "queue", job.Queue)
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
 		err = fmt.Errorf("error acquiring connection: %w", err)
@@ -289,7 +289,7 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 	}
 	defer conn.Release()
 
-	p.logger.Debug("beginning new transaction to enqueue job")
+	p.logger.Debug("beginning new transaction to enqueue job", "queue", job.Queue)
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		err = fmt.Errorf("error creating transaction: %w", err)
@@ -308,7 +308,7 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 				return
 			}
 		}
-		p.logger.Error("error enqueueing job", "error", err)
+		p.logger.Error("error enqueueing job", "queue", job.Queue, "error", err)
 		err = fmt.Errorf("error enqueuing job: %w", err)
 	}
 
@@ -317,14 +317,14 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 		err = fmt.Errorf("error committing transaction: %w", err)
 		return
 	}
-	p.logger.Debug("job added to queue:", "job_id", jobID)
+	p.logger.Debug("job added to queue:", "queue", job.Queue, "job_id", jobID)
 
 	// add future jobs to the future job list
 	if job.RunAfter.After(time.Now().UTC()) {
 		p.mu.Lock()
 		p.futureJobs[jobID] = job.RunAfter
 		p.mu.Unlock()
-		p.logger.Debug("added job to future jobs list", "job_id", jobID, "run_after", job.RunAfter)
+		p.logger.Debug("added job to future jobs list", "queue", job.Queue, "job_id", jobID, "run_after", job.RunAfter)
 	}
 
 	return jobID, nil
@@ -354,13 +354,13 @@ func (p *PgBackend) Start(ctx context.Context, h handler.Handler) (err error) {
 func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Handler) (err error) {
 	cd, err := crondescriptor.NewCronDescriptor(cronSpec)
 	if err != nil {
-		p.logger.Error("error creating cron descriptor", "cronspec", cronSpec, "error", err)
+		p.logger.Error("error creating cron descriptor", "queue", h.Queue, "cronspec", cronSpec, "error", err)
 		return fmt.Errorf("error creating cron descriptor: %w", err)
 	}
 
 	cdStr, err := cd.GetDescription(crondescriptor.Full)
 	if err != nil {
-		p.logger.Error("error getting cron descriptor", "descriptor", crondescriptor.Full, "error", err)
+		p.logger.Error("error getting cron descriptor", "queue", h.Queue, "descriptor", crondescriptor.Full, "error", err)
 		return fmt.Errorf("error getting cron description: %w", err)
 	}
 
@@ -383,7 +383,7 @@ func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Ha
 				return
 			}
 
-			p.logger.Error("error queueing cron job", "error", err)
+			p.logger.Error("error queueing cron job", "queue", h.Queue, "error", err)
 		}
 	}); err != nil {
 		return fmt.Errorf("error adding cron: %w", err)
@@ -428,7 +428,7 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (job
 		return
 	}
 
-	p.logger.Debug("adding job to the queue")
+	p.logger.Debug("adding job to the queue", "queue", j.Queue)
 	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
@@ -559,7 +559,7 @@ func (p *PgBackend) start(ctx context.Context, h handler.Handler) (err error) {
 						continue
 					}
 
-					p.logger.Error("job failed", "error", err, "job_id", jobID)
+					p.logger.Error("job failed", "queue", h.Queue, "error", err, "job_id", jobID)
 
 					continue
 				}
@@ -575,7 +575,7 @@ func (p *PgBackend) start(ctx context.Context, h handler.Handler) (err error) {
 func (p *PgBackend) initFutureJobs(ctx context.Context, queue string) (err error) {
 	rows, err := p.pool.Query(ctx, FutureJobQuery, queue)
 	if err != nil {
-		p.logger.Error("failed to fetch future jobs list", err)
+		p.logger.Error("failed to fetch future jobs list", "queue", queue, err)
 		return
 	}
 
@@ -665,7 +665,7 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
-		p.logger.Error("failed to acquire database connection to listen for pending queue items", err)
+		p.logger.Error("failed to acquire database connection to listen for pending queue items", "queue", queue, "error", err)
 		return
 	}
 
@@ -679,7 +679,7 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 					break
 				}
 
-				p.logger.Error("failed to fetch pending job", "error", err, "job_id", jobID)
+				p.logger.Error("failed to fetch pending job", "queue", queue, "error", err, "job_id", jobID)
 			} else {
 				jobsCh <- jobID
 			}
@@ -715,7 +715,7 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string, h handler.Handl
 
 	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
 		err = jobs.ErrJobExceededDeadline
-		p.logger.Debug("job deadline is in he past, skipping", "job_id", job.ID)
+		p.logger.Debug("job deadline is in the past, skipping", "queue", h.Queue, "job_id", job.ID)
 		err = p.updateJob(ctx, err)
 		return
 	}
@@ -743,7 +743,7 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string, h handler.Handl
 	err = tx.Commit(ctx)
 	if err != nil {
 		errMsg := "unable to commit job transaction. retrying this job may dupliate work:"
-		p.logger.Error(errMsg, "error", err, "job_id", job.ID)
+		p.logger.Error(errMsg, "queue", h.Queue, "error", err, "job_id", job.ID)
 		return fmt.Errorf("%s %w", errMsg, err)
 	}
 
@@ -761,7 +761,7 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 	go func(ctx context.Context) {
 		conn, err := p.pool.Acquire(ctx)
 		if err != nil {
-			p.logger.Error("unable to acquire new listener connnection", "error", err)
+			p.logger.Error("unable to acquire new listener connnection", "queue", queue, "error", err)
 			return
 		}
 		defer p.release(ctx, conn, queue)
@@ -770,7 +770,7 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 		_, err = conn.Exec(ctx, fmt.Sprintf("SET idle_in_transaction_session_timeout = '0'; LISTEN %s", queue))
 		if err != nil {
 			err = fmt.Errorf("unable to configure listener connection: %w", err)
-			p.logger.Error("unable to configure listener connection", "error", err)
+			p.logger.Error("unable to configure listener connection", "queue", queue, "error", err)
 			return
 		}
 
@@ -784,7 +784,7 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 					return
 				}
 
-				p.logger.Error("failed to wait for notification", "error", waitErr)
+				p.logger.Error("failed to wait for notification", "queue", queue, "error", waitErr)
 				continue
 			}
 
@@ -808,7 +808,7 @@ func (p *PgBackend) release(ctx context.Context, conn *pgxpool.Conn, queue strin
 			return
 		}
 
-		p.logger.Error("unable to reset connection config before release", err)
+		p.logger.Error("unable to reset connection config before release", "queue", queue, "error", err)
 	}
 
 	conn.Release()
