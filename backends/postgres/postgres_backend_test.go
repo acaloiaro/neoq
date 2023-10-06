@@ -425,12 +425,12 @@ func TestMultipleCronNodes(t *testing.T) {
 		workers[i] = nq
 	}
 
-	const SlightlyMoreThanOneSecond = 1100 * time.Millisecond
+	const WaitForJobTime = 1100 * time.Millisecond
 
 	// allow time for listener to start and for at least one job to process
-	time.Sleep(SlightlyMoreThanOneSecond)
+	time.Sleep(WaitForJobTime)
 	if jobsCompleted == 0 {
-		t.Fatalf("no jobs were completed after %v", SlightlyMoreThanOneSecond)
+		t.Fatalf("no jobs were completed after %v", WaitForJobTime)
 	}
 
 	if duplicateJobs > 0 {
