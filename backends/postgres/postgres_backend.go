@@ -220,6 +220,10 @@ func txFromContext(ctx context.Context) (t pgx.Tx, err error) {
 
 // initializeDB initializes the tables, types, and indices necessary to operate Neoq
 //
+// This will consume the migration files embedded at build time and will connect to the DB using its own tooling and
+// perform the migrations. After which it will close its DB connections since they will not be needed after
+// initialization.
+//
 //nolint:funlen,gocyclo,cyclop
 func (p *PgBackend) initializeDB() (err error) {
 	migrations, err := iofs.New(migrationsFS, "migrations")
@@ -256,6 +260,8 @@ func (p *PgBackend) initializeDB() (err error) {
 		p.logger.Error("unable to run migrations", "error", err)
 		return
 	}
+	// We don't need the migration tooling to hold it's connections to the DB once it has been completed.
+	defer m.Close()
 
 	err = m.Up()
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
@@ -369,6 +375,10 @@ func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Ha
 	if err = p.cron.AddFunc(cronSpec, func() {
 		_, err := p.Enqueue(ctx, &jobs.Job{Queue: queue})
 		if err != nil {
+			// When we are working with a cron we want to ignore the canceled and the duplicate job errors. The duplicate job
+			// error specifically is not one the cron enqueuer needs to concern itself with because that means that another
+			// worker has already enqueued the job for this cron recurrence. It is not helpful to log the error in that
+			// scenario since the job will be processed.
 			if errors.Is(err, context.Canceled) || errors.Is(err, ErrDuplicateJob) {
 				return
 			}
