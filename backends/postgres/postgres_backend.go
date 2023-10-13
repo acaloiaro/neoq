@@ -441,7 +441,7 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (job
 }
 
 // moveToDeadQueue moves jobs from the pending queue to the dead queue
-func (p *PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *jobs.Job, jobErr error) (err error) {
+func (p *PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *jobs.Job, jobErr string) (err error) {
 	_, err = tx.Exec(ctx, "DELETE FROM neoq_jobs WHERE id = $1", j.ID)
 	if err != nil {
 		return
@@ -449,7 +449,7 @@ func (p *PgBackend) moveToDeadQueue(ctx context.Context, tx pgx.Tx, j *jobs.Job,
 
 	_, err = tx.Exec(ctx, `INSERT INTO neoq_dead_jobs(id, queue, fingerprint, payload, retries, max_retries, error, deadline)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		j.ID, j.Queue, j.Fingerprint, j.Payload, j.Retries, j.MaxRetries, jobErr.Error(), j.Deadline)
+		j.ID, j.Queue, j.Fingerprint, j.Payload, j.Retries, j.MaxRetries, jobErr, j.Deadline)
 
 	return
 }
@@ -491,7 +491,7 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 	}
 
 	if job.MaxRetries != nil && job.Retries >= *job.MaxRetries {
-		err = p.moveToDeadQueue(ctx, tx, job, jobErr)
+		err = p.moveToDeadQueue(ctx, tx, job, errMsg)
 		return
 	}
 
