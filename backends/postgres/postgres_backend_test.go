@@ -18,6 +18,7 @@ import (
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/testutils"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,9 +26,7 @@ const (
 	ConcurrentWorkers = 8
 )
 
-var (
-	errPeriodicTimeout = errors.New("timed out waiting for periodic job")
-)
+var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
 
 // prepareAndCleanupDB should be run at the beginning of each test. It will check to see if the TEST_DATABASE_URL is
 // present and has a valid connection string. If it does it will connect to the DB and clean up any jobs that might be
@@ -495,5 +494,84 @@ results_loop:
 
 	if err != nil {
 		t.Error(err)
+	}
+}
+
+// Test_MoveJobsToDeadQueue tests that when a job's MaxRetries is reached, that the job is moved ot the dead queue successfully
+func Test_MoveJobsToDeadQueue(t *testing.T) {
+	connString, conn := prepareAndCleanupDB(t)
+	const queue = "testing"
+	maxRetries := 0
+	done := make(chan bool)
+	defer close(done)
+
+	timeoutTimer := time.After(5 * time.Second)
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(postgres.Backend),
+		postgres.WithConnectionString(connString),
+		postgres.WithTransactionTimeout(60000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		done <- true
+		panic("no good")
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+		MaxRetries: &maxRetries,
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+	if err != nil {
+		t.Error(err)
+	}
+
+	// ensure job has fields set correctly
+	maxWait := time.Now().Add(30 * time.Second)
+	var status string
+	for {
+		if time.Now().After(maxWait) {
+			break
+		}
+
+		err = conn.
+			QueryRow(context.Background(), "SELECT status FROM neoq_dead_jobs WHERE id = $1", jid).
+			Scan(&status)
+
+		if err == nil {
+			break
+		}
+
+		if err != nil && errors.Is(err, pgx.ErrNoRows) {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		} else if err != nil {
+			t.Error(err)
+		}
+	}
+
+	if status != internal.JobStatusFailed {
+		t.Error("should be dead")
 	}
 }
