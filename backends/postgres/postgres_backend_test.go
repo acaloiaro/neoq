@@ -192,8 +192,8 @@ func TestMultipleProcessors(t *testing.T) {
 
 	// From one of the neoq clients, enqueue several jobs. At least one per processor registered above.
 	nq := neos[0]
+	wg.Add(ConcurrentWorkers)
 	for i := 0; i < ConcurrentWorkers; i++ {
-		wg.Add(1)
 		ctx := context.Background()
 		deadline := time.Now().UTC().Add(10 * time.Second)
 		jid, e := nq.Enqueue(ctx, &jobs.Job{
@@ -498,6 +498,7 @@ results_loop:
 }
 
 // Test_MoveJobsToDeadQueue tests that when a job's MaxRetries is reached, that the job is moved ot the dead queue successfully
+// https://github.com/acaloiaro/neoq/issues/98
 func Test_MoveJobsToDeadQueue(t *testing.T) {
 	connString, conn := prepareAndCleanupDB(t)
 	const queue = "testing"
@@ -637,5 +638,103 @@ func TestJobEnqueuedSeparately(t *testing.T) {
 	}
 	if err != nil {
 		t.Error(err)
+	}
+}
+
+// TestBasicJobMultipleQueueWithError tests that the postgres backend is able to process jobs on multiple queues
+// and retries occur
+// https://github.com/acaloiaro/neoq/issues/98
+// nolint: gocyclo
+func TestBasicJobMultipleQueueWithError(t *testing.T) {
+	connString, conn := prepareAndCleanupDB(t)
+	const queue = "testing"
+	const queue2 = "testing2"
+
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(postgres.Backend),
+		neoq.WithLogLevel(logging.LogLevelDebug),
+		postgres.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		return
+	})
+
+	h2 := handler.New(queue2, func(_ context.Context) (err error) {
+		panic("no good")
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = nq.Start(ctx, h2)
+	if err != nil {
+		t.Error(err)
+	}
+
+	job2Chan := make(chan string, 100)
+	go func() {
+		jid, err := nq.Enqueue(ctx, &jobs.Job{
+			Queue: queue,
+			Payload: map[string]interface{}{
+				"message": fmt.Sprintf("should not fail: %d", internal.RandInt(10000000000)),
+			},
+		})
+		if err != nil || jid == jobs.DuplicateJobID {
+			t.Error(err)
+		}
+
+		maxRetries := 1
+		jid2, err := nq.Enqueue(ctx, &jobs.Job{
+			Queue: queue2,
+			Payload: map[string]interface{}{
+				"message": fmt.Sprintf("should fail: %d", internal.RandInt(10000000000)),
+			},
+			MaxRetries: &maxRetries,
+		})
+		if err != nil || jid2 == jobs.DuplicateJobID {
+			t.Error(err)
+		}
+
+		job2Chan <- jid2
+	}()
+
+	// wait for the job to process before waiting for updates
+	jid2 := <-job2Chan
+
+	// ensure job has fields set correctly
+	maxWait := time.Now().Add(30 * time.Second)
+	var status string
+	for {
+		if time.Now().After(maxWait) {
+			break
+		}
+
+		err = conn.
+			QueryRow(context.Background(), "SELECT status FROM neoq_dead_jobs WHERE id = $1", jid2).
+			Scan(&status)
+
+		if err == nil {
+			break
+		}
+
+		// jid2 is empty until the job gets queued
+		if jid2 == "" || err != nil && errors.Is(err, pgx.ErrNoRows) {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		} else if err != nil {
+			t.Error(err)
+			return
+		}
+	}
+
+	if status != internal.JobStatusFailed {
+		t.Error("should be dead")
 	}
 }
