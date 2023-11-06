@@ -120,7 +120,7 @@ func Backend(_ context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, e
 			SchedulerOpts: &asynq.SchedulerOpts{
 				PostEnqueueFunc: func(_ *asynq.TaskInfo, err error) {
 					if err != nil {
-						b.logger.Error("unable to schedule task", err)
+						b.logger.Error("unable to schedule task", slog.Any("error", err))
 					}
 				},
 			},
@@ -210,24 +210,24 @@ func (b *RedisBackend) Start(_ context.Context, h handler.Handler) (err error) {
 		taskID := t.ResultWriter().TaskID()
 		var p map[string]any
 		if err = json.Unmarshal(t.Payload(), &p); err != nil {
-			b.logger.Info("job has no payload", "task_id", taskID)
+			b.logger.Info("job has no payload", slog.String("task_id", taskID))
 		}
 
 		ti, err := b.inspector.GetTaskInfo(defaultAsynqQueue, taskID)
 		if err != nil {
-			b.logger.Error("unable to process job", "error", err)
+			b.logger.Error("unable to process job", slog.Any("error", err))
 			return
 		}
 
 		if !ti.Deadline.IsZero() && ti.Deadline.UTC().Before(time.Now().UTC()) {
 			err = jobs.ErrJobExceededDeadline
-			b.logger.Debug("job deadline is in the past, skipping", "task_id", taskID)
+			b.logger.Debug("job deadline is in the past, skipping", slog.String("task_id", taskID))
 			return
 		}
 
 		if ti.Retried >= ti.MaxRetry {
 			err = jobs.ErrJobExceededMaxRetries
-			b.logger.Debug("job has exceeded the maximum number of retries, skipping", "task_id", taskID)
+			b.logger.Debug("job has exceeded the maximum number of retries, skipping", slog.String("task_id", taskID))
 			return
 		}
 
@@ -243,7 +243,7 @@ func (b *RedisBackend) Start(_ context.Context, h handler.Handler) (err error) {
 		ctx = withJobContext(ctx, job)
 		err = handler.Exec(ctx, h)
 		if err != nil {
-			b.logger.Error("error handling job", "error", err)
+			b.logger.Error("error handling job", slog.Any("error", err))
 		}
 
 		return

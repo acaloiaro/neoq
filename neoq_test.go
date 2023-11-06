@@ -224,7 +224,7 @@ func TestSetLogger(t *testing.T) {
 		t.Error(err)
 	}
 
-	expectedLogMsg := "adding a new job [queue testing]"
+	expectedLogMsg := "adding a new job [queue=testing]"
 results_loop:
 	for {
 		select {
