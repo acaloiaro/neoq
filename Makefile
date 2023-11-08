@@ -22,6 +22,7 @@ test: install-gotestsum
 	@gotestsum \
 		--junitfile tmp/output/gotestsum-report.xml \
 		-- \
+		-timeout=2m \
 		-count=5 \
 		-race \
 		-cover \
