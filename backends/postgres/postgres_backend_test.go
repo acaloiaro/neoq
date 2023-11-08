@@ -378,6 +378,89 @@ func TestCron(t *testing.T) {
 	}
 }
 
+func TestMultipleCrons(t *testing.T) {
+	done := make(chan bool, 1)
+	defer close(done)
+	const cronOne = "* * * * * *"
+	const cronTwo = "1 * * * * *"
+	const cronThree = "2 * * * * *"
+	connString, _ := prepareAndCleanupDB(t)
+
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	{ // Start the first cron handler
+		h := handler.NewPeriodic(func(ctx context.Context) (err error) {
+			done <- true
+			return
+		})
+
+		h.WithOptions(
+			handler.JobTimeout(500*time.Millisecond),
+			handler.Concurrency(1),
+		)
+
+		err = nq.StartCron(ctx, cronOne, h)
+		if err != nil {
+			t.Error(err)
+		}
+	}
+
+	{ // Start the second cron handler
+		h := handler.NewPeriodic(func(ctx context.Context) (err error) {
+			done <- true
+			return
+		})
+
+		h.WithOptions(
+			handler.JobTimeout(500*time.Millisecond),
+			handler.Concurrency(1),
+		)
+
+		err = nq.StartCron(ctx, cronTwo, h)
+		if err != nil {
+			t.Error(err)
+		}
+	}
+
+	{ // Start the third cron handler
+		h := handler.NewPeriodic(func(ctx context.Context) (err error) {
+			done <- true
+			return
+		})
+
+		h.WithOptions(
+			handler.JobTimeout(500*time.Millisecond),
+			handler.Concurrency(1),
+		)
+
+		// Will hang here
+		fmt.Println("before cron three is started")
+		err = nq.StartCron(ctx, cronThree, h)
+		if err != nil {
+			t.Error(err)
+		}
+		fmt.Println("if you can see me things are working!")
+	}
+
+	// allow time for listener to start
+	time.Sleep(5 * time.Millisecond)
+
+	select {
+	case <-time.After(3 * time.Second):
+		err = errPeriodicTimeout
+	case <-done:
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
+}
+
 func TestMultipleCronNodes(t *testing.T) {
 	jobsProcessed := sync.Map{}
 	const cron = "* * * * * *"
