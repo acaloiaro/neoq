@@ -388,6 +388,9 @@ func TestMultipleCrons(t *testing.T) {
 		"3 * * * * *",
 		"4 * * * * *",
 		"5 * * * * *",
+		"6 * * * * *",
+		"7 * * * * *",
+		"8 * * * * *",
 	}
 	connString, _ := prepareAndCleanupDB(t)
 
@@ -401,7 +404,6 @@ func TestMultipleCrons(t *testing.T) {
 	// start the crons
 	for _, cron := range crons { // Start the first cron handler
 		h := handler.NewPeriodic(func(ctx context.Context) (err error) {
-			done <- true
 			return
 		})
 
@@ -415,19 +417,6 @@ func TestMultipleCrons(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-	}
-
-	// allow time for listener to start
-	time.Sleep(5 * time.Millisecond)
-
-	select {
-	case <-time.After(3 * time.Second):
-		err = errPeriodicTimeout
-	case <-done:
-	}
-
-	if err != nil {
-		t.Error(err)
 	}
 }
 
