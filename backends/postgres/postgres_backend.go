@@ -333,17 +333,21 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 func (p *PgBackend) Start(ctx context.Context, h handler.Handler) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	p.logger.Debug("starting job processing", "queue", h.Queue)
+	p.logger.Debug("adding job handler", "queue", h.Queue)
 	p.mu.Lock()
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
 	p.handlers[h.Queue] = h
 	p.mu.Unlock()
+	p.logger.Debug("added job handler", "queue", h.Queue)
 
+	p.logger.Debug("starting job processor", "queue", h.Queue)
 	err = p.start(ctx, h)
 	if err != nil {
 		p.logger.Error("unable to start processing queue", "queue", h.Queue, "error", err)
 		return
 	}
+	p.logger.Debug("started job processor", "queue", h.Queue)
+
 	return
 }
 
@@ -531,9 +535,11 @@ func (p *PgBackend) start(ctx context.Context, h handler.Handler) (err error) {
 
 	pendingJobsChan := p.pendingJobs(ctx, h.Queue) // process overdue jobs *at startup*
 
+	p.logger.Debug(("waiting for listen chan to become ready", "queue", h.Queue)
 	// wait for the listener to connect and be ready to listen
 	<-ready
 
+	p.logger.Debug(("listen channel is ready", "queue", h.Queue)
 	// process all future jobs and retries
 	go func() { p.scheduleFutureJobs(ctx, h.Queue) }()
 
@@ -664,11 +670,13 @@ func (p *PgBackend) announceJob(ctx context.Context, queue, jobID string) {
 func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan string) {
 	jobsCh = make(chan string)
 
+	p.logger.Debug(("acquiring connection from the connection pool to process pending jobs", "queue", queue)
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
 		p.logger.Error("failed to acquire database connection to listen for pending queue items", "queue", queue, "error", err)
 		return
 	}
+	p.logger.Debug(("acquired connection from the connection pool to process pending jobs", "queue", queue)
 
 	go func(ctx context.Context) {
 		defer conn.Release()
@@ -697,11 +705,14 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 func (p *PgBackend) handleJob(ctx context.Context, jobID string, h handler.Handler) (err error) {
 	var job *jobs.Job
 	var tx pgx.Tx
+
+	p.logger.Debug(("acquiring connection from the connection pool to process pending jobs", "queue", h.Queue)
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
 		return
 	}
 	defer conn.Release()
+	p.logger.Debug(("acquired connection from the connection pool to process pending jobs", "queue", h.Queue)
 
 	tx, err = conn.Begin(ctx)
 	if err != nil {
@@ -760,13 +771,16 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 	ready = make(chan bool)
 
 	go func(ctx context.Context) {
+		p.logger.Debug(("acquiring connection to listen for new jobs", "queue", queue)
 		conn, err := p.pool.Acquire(ctx)
 		if err != nil {
 			p.logger.Error("unable to acquire new listener connection", "queue", queue, "error", err)
 			return
 		}
 		defer p.release(ctx, conn, queue)
+		p.logger.Debug(("acquired connection to listen for new jobs", "queue", queue)
 
+		p.logger.Debug(("setting up listener on queue", "queue", queue)
 		// set this connection's idle in transaction timeout to infinite so it is not intermittently disconnected
 		_, err = conn.Exec(ctx, fmt.Sprintf(`SET idle_in_transaction_session_timeout = '0'; LISTEN %q`, queue))
 		if err != nil {
@@ -774,9 +788,12 @@ func (p *PgBackend) listen(ctx context.Context, queue string) (c chan string, re
 			p.logger.Error("unable to configure listener connection", "queue", queue, "error", err)
 			return
 		}
+		p.logger.Debug(("set up listener on queue", "queue", queue)
 
+		p.logger.Debug(("notifying job processor queue is ready", "queue", queue)
 		// notify start() that we're ready to listen for jobs
 		ready <- true
+		p.logger.Debug(("notified job processor queue is ready", "queue", queue)
 
 		for {
 			notification, waitErr := conn.Conn().WaitForNotification(ctx)
