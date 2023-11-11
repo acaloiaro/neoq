@@ -38,6 +38,7 @@ type Config struct {
 	ShutdownTimeout        time.Duration    // duration to wait for jobs to finish during shutdown
 	SynchronousCommit      bool             // Postgres: Enable synchronous commits (increases durability, decreases performance)
 	LogLevel               logging.LogLevel // the log level of the default logger
+	PGConnectionTimeout    time.Duration    // the amount of time to wait for a connection to become available before timing out
 }
 
 // ConfigOption is a function that sets optional backend configuration

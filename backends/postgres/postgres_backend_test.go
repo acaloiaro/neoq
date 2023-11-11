@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -737,4 +739,86 @@ func TestBasicJobMultipleQueueWithError(t *testing.T) {
 	if status != internal.JobStatusFailed {
 		t.Error("should be dead")
 	}
+}
+
+// Test_MoveJobsToDeadQueue tests that when a job's MaxRetries is reached, that the job is moved ot the dead queue successfully
+// https://github.com/acaloiaro/neoq/issues/98
+func Test_ConnectionTimeout(t *testing.T) {
+	connString, _ := prepareAndCleanupDB(t)
+
+	const queue = "testing"
+	done := make(chan bool)
+	defer close(done)
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(postgres.Backend),
+		postgres.WithConnectionString(connString),
+		postgres.WithConnectionTimeout(0*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	go func() {
+		err = nq.Start(ctx, h)
+		done <- true
+	}()
+
+	timeoutTimer := time.After(5 * time.Second)
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+
+	if !errors.Is(err, postgres.ErrExceededConnectionPoolTimeout) {
+		t.Error(err)
+	}
+
+	// Create an instance with a non-zero timeout, but only give allow a pool size of 1
+	// this will trquire a failure to acquire connections when the number of Start() calls exceeds 1
+	nq, err = neoq.New(ctx,
+		neoq.WithBackend(postgres.Backend),
+		postgres.WithConnectionString(maxConnsDBUrl(1)),
+		postgres.WithConnectionTimeout(100*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	go func() {
+		err = nq.Start(ctx, h)
+		if err != nil {
+			return
+		}
+
+		err = nq.Start(ctx, h)
+		done <- true
+	}()
+
+	timeoutTimer = time.After(5 * time.Second)
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+
+	log.Println("The error is", err)
+	if !errors.Is(err, postgres.ErrExceededConnectionPoolTimeout) {
+		t.Error(err)
+	}
+}
+
+func maxConnsDBUrl(maxConns int) (dbURL string) {
+	dbURL = os.Getenv("TEST_DATABASE_URL")
+	r := regexp.MustCompile(`pool_max_conns=\d+`)
+	dbURL = string(r.ReplaceAll([]byte(dbURL), []byte(fmt.Sprintf("pool_max_conns=%d", maxConns))))
+
+	log.Println("URL", dbURL)
+	return
 }
