@@ -896,7 +896,7 @@ func (p *PgBackend) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, que
 
 // acquire acquires connections from the connection pool with a timeout
 //
-// the purpose of this function is to skirt pgxpool's default blocking behavior with connection acquisition preemtion
+// the purpose of this function is to skirt pgxpool's default blocking behavior with connection acquisition preemption
 func (p *PgBackend) acquire(ctx context.Context) (conn *pgxpool.Conn, err error) {
 	ctx, cancelFunc := context.WithDeadline(ctx, time.Now().Add(p.config.PGConnectionTimeout))
 	defer cancelFunc()
