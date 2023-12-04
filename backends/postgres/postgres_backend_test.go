@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -155,11 +153,19 @@ func TestBasicJobProcessing(t *testing.T) {
 
 func TestMultipleProcessors(t *testing.T) {
 	const queue = "testing"
+	var execCount uint32
+	var wg sync.WaitGroup
 
 	connString, _ := prepareAndCleanupDB(t)
 
-	var execCount uint32
-	var wg sync.WaitGroup
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		atomic.AddUint32(&execCount, 1)
+		wg.Done()
+		return
+	})
+	// Make sure that each neoq worker only works on one thing at a time.
+	h.Concurrency = 1
+
 	neos := make([]neoq.Neoq, 0, ConcurrentWorkers)
 	// Create several neoq processors such that we can enqueue several jobs and have them consumed by multiple different
 	// workers. We want to make sure that a job is not processed twice in a pool of many different neoq workers.
@@ -172,17 +178,6 @@ func TestMultipleProcessors(t *testing.T) {
 		t.Cleanup(func() {
 			nq.Shutdown(ctx)
 		})
-
-		h := handler.New(queue, func(_ context.Context) (err error) {
-			// Make sure that by wasting some time working on a thing we don't consume two jobs back to back.
-			// This should give the other neoq clients enough time to grab a job as well.
-			time.Sleep(500 * time.Millisecond)
-			atomic.AddUint32(&execCount, 1)
-			wg.Done()
-			return
-		})
-		// Make sure that each neoq worker only works on one thing at a time.
-		h.Concurrency = 1
 
 		err = nq.Start(ctx, h)
 		if err != nil {
@@ -271,7 +266,12 @@ func TestBasicJobMultipleQueue(t *testing.T) {
 	connString, _ := prepareAndCleanupDB(t)
 
 	ctx := context.TODO()
-	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(postgres.Backend),
+		postgres.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelDebug),
+		postgres.WithConnectionTimeout(1*time.Second),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -759,13 +759,8 @@ func Test_ConnectionTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := handler.New(queue, func(_ context.Context) (err error) {
-		done <- true
-		return
-	})
-
 	go func() {
-		err = nq.Start(ctx, h)
+		_, err = nq.Enqueue(ctx, &jobs.Job{Queue: queue})
 		done <- true
 	}()
 
@@ -779,46 +774,4 @@ func Test_ConnectionTimeout(t *testing.T) {
 	if !errors.Is(err, postgres.ErrExceededConnectionPoolTimeout) {
 		t.Error(err)
 	}
-
-	// Create an instance with a non-zero timeout, but only give allow a pool size of 1
-	// this will trquire a failure to acquire connections when the number of Start() calls exceeds 1
-	nq, err = neoq.New(ctx,
-		neoq.WithBackend(postgres.Backend),
-		postgres.WithConnectionString(maxConnsDBUrl(1)),
-		postgres.WithConnectionTimeout(100*time.Millisecond))
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
-
-	go func() {
-		err = nq.Start(ctx, h)
-		if err != nil {
-			return
-		}
-
-		err = nq.Start(ctx, h)
-		done <- true
-	}()
-
-	timeoutTimer = time.After(5 * time.Second)
-	select {
-	case <-timeoutTimer:
-		err = jobs.ErrJobTimeout
-	case <-done:
-	}
-
-	log.Println("The error is", err)
-	if !errors.Is(err, postgres.ErrExceededConnectionPoolTimeout) {
-		t.Error(err)
-	}
-}
-
-func maxConnsDBUrl(maxConns int) (dbURL string) {
-	dbURL = os.Getenv("TEST_DATABASE_URL")
-	r := regexp.MustCompile(`pool_max_conns=\d+`)
-	dbURL = string(r.ReplaceAll([]byte(dbURL), []byte(fmt.Sprintf("pool_max_conns=%d", maxConns))))
-
-	log.Println("URL", dbURL)
-	return
 }
