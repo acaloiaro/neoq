@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"testing"
@@ -187,6 +188,77 @@ func TestStartCron(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		err = errPeriodicTimeout
 	case <-done:
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func TestMultipleCronSameSchedule(t *testing.T) {
+	const cronSpec = "* * * * * *"
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	done := make(chan bool)
+	done2 := make(chan bool)
+	h := handler.NewPeriodic(func(ctx context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	h.WithOptions(
+		handler.JobTimeout(500*time.Millisecond),
+		handler.Concurrency(1),
+	)
+
+	h2 := handler.NewPeriodic(func(ctx context.Context) (err error) {
+		done2 <- true
+		return
+	})
+
+	h2.WithOptions(
+		handler.JobTimeout(500*time.Millisecond),
+		handler.Concurrency(1),
+	)
+
+	err = nq.StartCron(ctx, cronSpec, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = nq.StartCron(ctx, cronSpec, h2)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// allow time for listener to start
+	time.Sleep(5 * time.Millisecond)
+
+	completeCount := 0
+wait_done:
+	for {
+		select {
+		case <-time.After(1 * time.Second):
+			err = errPeriodicTimeout
+			break wait_done
+		case <-done:
+			completeCount++
+			log.Println("First done")
+			if completeCount == 2 {
+				break wait_done
+			}
+		case <-done2:
+			completeCount++
+			log.Println("Second done")
+			if completeCount == 2 {
+				break wait_done
+			}
+		}
 	}
 
 	if err != nil {

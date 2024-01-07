@@ -16,7 +16,7 @@ import (
 	"github.com/guregu/null"
 	"github.com/iancoleman/strcase"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
-	"github.com/robfig/cron"
+	"github.com/robfig/cron/v3"
 	"golang.org/x/exp/slog"
 )
 
@@ -45,7 +45,7 @@ type MemBackend struct {
 func Backend(_ context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, err error) {
 	mb := &MemBackend{
 		config:       neoq.NewConfig(),
-		cron:         cron.New(),
+		cron:         cron.New(cron.WithSeconds()),
 		mu:           &sync.Mutex{},
 		queues:       &sync.Map{},
 		handlers:     &sync.Map{},
@@ -179,7 +179,7 @@ func (m *MemBackend) StartCron(ctx context.Context, cronSpec string, h handler.H
 		return fmt.Errorf("error processing queue '%s': %w", queue, err)
 	}
 
-	if err := m.cron.AddFunc(cronSpec, func() {
+	if _, err := m.cron.AddFunc(cronSpec, func() {
 		_, _ = m.Enqueue(ctx, &jobs.Job{Queue: queue})
 	}); err != nil {
 		return fmt.Errorf("error adding cron: %w", err)

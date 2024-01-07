@@ -23,7 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
-	"github.com/robfig/cron"
+	"github.com/robfig/cron/v3"
 	"golang.org/x/exp/slices"
 	"golang.org/x/exp/slog"
 )
@@ -121,7 +121,7 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 	p := &PgBackend{
 		cancelFuncs:    []context.CancelFunc{},
 		config:         cfg,
-		cron:           cron.New(),
+		cron:           cron.New(cron.WithSeconds()),
 		futureJobs:     make(map[string]*jobs.Job),
 		handlers:       make(map[string]handler.Handler),
 		newQueues:      make(chan string),
@@ -482,7 +482,7 @@ func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Ha
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
 	p.mu.Unlock()
 
-	if err = p.cron.AddFunc(cronSpec, func() {
+	if _, err = p.cron.AddFunc(cronSpec, func() {
 		_, err := p.Enqueue(ctx, &jobs.Job{Queue: queue})
 		if err != nil {
 			// When we are working with a cron we want to ignore the canceled and the duplicate job errors. The duplicate job
