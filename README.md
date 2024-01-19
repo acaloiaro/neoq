@@ -2,7 +2,7 @@
 
 Queue-agnostic background job library for Go, with a pleasant API and powerful features.
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/acaloiaro/neoq.svg)](https://pkg.go.dev/github.com/acaloiaro/neoq) ![Matrix Chat](https://img.shields.io/matrix/%23neoq%3Amatrix.org)
+[![Go Reference](https://pkg.go.dev/badge/github.com/acaloiaro/neoq.svg)](https://pkg.go.dev/github.com/acaloiaro/neoq) ![Matrix](https://img.shields.io/matrix/neoq%3Amatrix.org?link=https%3A%2F%2Fmatrix.to%2F%23%2F%2523neoq%3Amatrix.org)
 
 # Getting Started 
 
