@@ -2,7 +2,7 @@
 
 Queue-agnostic background job library for Go, with a pleasant API and powerful features.
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/acaloiaro/neoq.svg)](https://pkg.go.dev/github.com/acaloiaro/neoq) [![Gitter chat](https://badges.gitter.im/gitterHQ/gitter.png)](https://app.gitter.im/#/room/#neoq:gitter.im)
+[![Go Reference](https://pkg.go.dev/badge/github.com/acaloiaro/neoq.svg)](https://pkg.go.dev/github.com/acaloiaro/neoq) <code>/matrix/!QklXuMlMRKzkYDRzaH/gitter.im</code>
 
 # Getting Started 
 
