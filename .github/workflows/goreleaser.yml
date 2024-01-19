@@ -2,6 +2,8 @@ name: goreleaser
 
 on:
   push:
+    paths-ignore:
+      - '**.md'
     branches:
       - main
 
