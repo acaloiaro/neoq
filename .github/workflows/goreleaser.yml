@@ -3,7 +3,8 @@ name: goreleaser
 on:
   push:
     paths-ignore:
-      - '**.md'
+      - README.md
+      - env.sample 
     branches:
       - main
 
