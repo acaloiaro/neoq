@@ -21,8 +21,7 @@ vendor/
 # it's handy to have a docker-compose available during development
 docker-compose.yml
 
-.pre-commit-config.yaml
-
 dist/
-
-
+.devenv/
+.direnv/
+.pre-commit-config.yaml

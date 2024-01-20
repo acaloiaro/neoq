@@ -123,6 +123,40 @@ nq.Enqueue(ctx, &jobs.Job{
 
 Additional example integration code can be found at https://github.com/acaloiaro/neoq/tree/main/examples
 
+# Developing 
+
+Neoq development is largely based on Nix and `devenv`.
+
+After [installing nix](https://nixos.org/download), this repository contains everything else you will need to develop
+and run tests. 
+
+## Automatic setup and teardown 
+
+`direnv` is used to let neoq automatically configure its own dev environment. This includes installing dependencies and 
+developer tooling.
+
+See [installing direnv](https://direnv.net/docs/installation.html) if you want the dev environment setup to be automated. 
+
+## Manual setup and teardown 
+
+Neoq uses `devenv` to manage development environments and services.
+
+To enter the development shell, run `nix develop --impure`. 
+
+In order to run the test suite, the required services need to be started. Start services by running the following:
+
+## Running services for tests 
+
+The neoq development shell gives you the `devenv` executable. 
+
+To run postgres and redis for tests and development, run 
+
+```
+devenv up
+```
+
+This runs Postgres and Redis in the foreground. In a separate terminal, run `make test` to run the test suite.
+
 # Status
 
-This project is currently in alpha. Future releases may change the API.
+This project is currently pre-1.0. Future releases may change the API.
