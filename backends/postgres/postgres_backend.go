@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -344,7 +345,7 @@ func (p *PgBackend) initializeDB() (err error) {
 
 	pqConnectionString := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s&x-migrations-table=neoq_schema_migrations",
 		pgxCfg.User,
-		pgxCfg.Password,
+		url.QueryEscape(pgxCfg.Password),
 		pgxCfg.Host,
 		pgxCfg.Database,
 		sslMode)
