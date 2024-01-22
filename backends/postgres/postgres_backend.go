@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -337,10 +338,19 @@ func (p *PgBackend) initializeDB() (err error) {
 		return
 	}
 
-	sslMode := "verify-ca"
 	// nil TLSConfig means "sslmode=disable" was set on the connection
+	sslMode := "verify-ca"
 	if pgxCfg.TLSConfig == nil {
 		sslMode = "disable"
+	} else if pgxCfg.TLSConfig.InsecureSkipVerify {
+		sslMode = "require"
+	}
+	if dbURL, err := url.Parse(pgxCfg.ConnString()); err == nil &&
+		strings.HasPrefix(dbURL.Scheme, "postgres") {
+		val := dbURL.Query()
+		if v := val.Get("sslmode"); v != "" {
+			sslMode = v // set sslmode from existing connection string
+		}
 	}
 
 	pqConnectionString := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s&x-migrations-table=neoq_schema_migrations",
