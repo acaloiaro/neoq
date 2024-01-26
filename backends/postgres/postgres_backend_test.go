@@ -406,8 +406,6 @@ func TestMultipleCronNodes(t *testing.T) {
 			_, exists := jobsProcessed.LoadOrStore(job.ID, "foo")
 			if exists {
 				t.Fatalf("job (%d) has already been processed by another worker!", job.ID)
-				atomic.AddUint32(&duplicateJobs, 1)
-				return nil
 			}
 			atomic.AddUint32(&jobsCompleted, 1)
 			return

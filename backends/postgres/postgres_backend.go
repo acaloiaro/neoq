@@ -403,6 +403,7 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 		}
 		p.logger.Error("error enqueueing job", slog.String("queue", job.Queue), slog.Any("error", err))
 		err = fmt.Errorf("error enqueuing job: %w", err)
+		return
 	}
 
 	err = tx.Commit(ctx)

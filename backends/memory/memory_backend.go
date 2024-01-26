@@ -67,7 +67,7 @@ func Backend(_ context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, e
 }
 
 // Enqueue queues jobs to be executed asynchronously
-func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
+func (m *MemBackend) Enqueue(_ context.Context, job *jobs.Job) (jobID string, err error) {
 	var queueChan chan *jobs.Job
 	var qc any
 	var ok bool
@@ -194,7 +194,7 @@ func (m *MemBackend) SetLogger(logger logging.Logger) {
 }
 
 // Shutdown halts the worker
-func (m *MemBackend) Shutdown(ctx context.Context) {
+func (m *MemBackend) Shutdown(_ context.Context) {
 	for _, f := range m.cancelFuncs {
 		f()
 	}

@@ -342,7 +342,7 @@ func (b *RedisBackend) SetLogger(logger logging.Logger) {
 }
 
 // Shutdown halts the worker
-func (b *RedisBackend) Shutdown(ctx context.Context) {
+func (b *RedisBackend) Shutdown(_ context.Context) {
 	b.client.Close()
 	b.server.Shutdown()
 }
