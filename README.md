@@ -132,18 +132,17 @@ and run tests.
 
 ## Automatic setup and teardown 
 
-`direnv` is used to let neoq automatically configure its own dev environment. This includes installing dependencies and 
-developer tooling.
-
 See [installing direnv](https://direnv.net/docs/installation.html) if you want the dev environment setup to be automated. 
+
+`direnv allow` allows `direnv` to automatically setup all tooling and dependencies in a development shell upon entering
+the neoq directory.
 
 ## Manual setup and teardown 
 
 Neoq uses `devenv` to manage development environments and services.
 
-To enter the development shell, run `nix develop --impure`. 
-
-In order to run the test suite, the required services need to be started. Start services by running the following:
+To enter the development shell, run `nix develop --impure`. If `devenv` is installed, this step is not necessary; simply 
+enter the neoq directory after having run `direnv allow`.
 
 ## Running services for tests 
 
@@ -156,6 +155,12 @@ devenv up
 ```
 
 This runs Postgres and Redis in the foreground. In a separate terminal, run `make test` to run the test suite.
+
+## Running tests 
+
+Before submitting pull requests, always run tests locally with after having run `devenv up`.
+
+Run `make test` to run the test suite. 
 
 # Status
 
