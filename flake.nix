@@ -34,6 +34,7 @@
               go_1_21
               gomod2nix.legacyPackages.${system}.gomod2nix
               gotools
+              golangci-lint
               go-tools
               gopls
               pre-commit
