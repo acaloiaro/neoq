@@ -311,7 +311,7 @@ func jobToTaskOptions(job *jobs.Job) (opts []asynq.Option) {
 //
 // # This implementation is very crude, and unlikely covers the full breadth of the cron spec, panic()ing when necessary
 //
-// TODO: Refactor if asynq merges https://github.com/hibiken/asynq/pull/644
+// Note: Refactor if asynq merges https://github.com/hibiken/asynq/pull/644
 func toAsynqCronspec(cronSpec string) string {
 	// nolint: nestif, gomnd
 	if strings.Count(cronSpec, "*") == 6 {
