@@ -41,8 +41,17 @@ type Config struct {
 	PGConnectionTimeout    time.Duration    // the amount of time to wait for a connection to become available before timing out
 }
 
+// JobOptions
+type JobOptions struct {
+	// Override allows the provided job to override an existing job with the same fingerprint
+	Override bool
+}
+
 // ConfigOption is a function that sets optional backend configuration
 type ConfigOption func(c *Config)
+
+// JobOption is a function that sets optional job enqueuing attributes
+type JobOption func(o *JobOptions)
 
 // NewConfig initiailizes a new Config with defaults
 func NewConfig() *Config {
@@ -63,7 +72,7 @@ type BackendInitializer func(ctx context.Context, opts ...ConfigOption) (backend
 //   - [pkg/github.com/acaloiaro/neoq/backends/redis.RedisBackend]
 type Neoq interface {
 	// Enqueue queues jobs to be executed asynchronously
-	Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error)
+	Enqueue(ctx context.Context, job *jobs.Job, opts ...JobOption) (jobID string, err error)
 
 	// Start starts processing jobs on the queue specified in the Handler
 	Start(ctx context.Context, h handler.Handler) (err error)
@@ -129,5 +138,13 @@ func WithJobCheckInterval(interval time.Duration) ConfigOption {
 func WithLogLevel(level logging.LogLevel) ConfigOption {
 	return func(c *Config) {
 		c.LogLevel = level
+	}
+}
+
+// WithOverrideMatchingFingerprint will overwrite all the properties of a queued job if the fingerprint matches
+// resetting the retries and updating the payload (if the fingerprint remains the same)
+func WithOverrideMatchingFingerprint() JobOption {
+	return func(o *JobOptions) {
+		o.Override = true
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends"
 	"github.com/acaloiaro/neoq/backends/memory"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/jobs"
@@ -21,9 +22,9 @@ import (
 	"golang.org/x/exp/slog"
 )
 
-const (
-	queue = "testing"
-)
+var queue = "testing"
+var q1 = "queue1"
+var q2 = "queue2"
 
 var (
 	errPeriodicTimeout = errors.New("timed out waiting for periodic job")
@@ -231,9 +232,6 @@ func TestFutureJobSchedulingMultipleQueues(t *testing.T) {
 	jobsProcessed1 := 0
 	jobsProcessed2 := 0
 
-	q1 := "queue1"
-	q2 := "queue2"
-
 	done1 := make(chan bool)
 	done2 := make(chan bool)
 
@@ -426,4 +424,13 @@ result_loop:
 	if err != nil {
 		t.Error(err)
 	}
+}
+
+func TestSuite(t *testing.T) {
+	ctx := context.Background()
+	n, err := neoq.New(ctx, neoq.WithBackend(memory.Backend), neoq.WithLogLevel(logging.LogLevelDebug))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends.NewNeoQTestSuite(n).Run(t)
 }

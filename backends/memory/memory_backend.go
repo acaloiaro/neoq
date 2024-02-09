@@ -67,7 +67,12 @@ func Backend(_ context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, e
 }
 
 // Enqueue queues jobs to be executed asynchronously
-func (m *MemBackend) Enqueue(_ context.Context, job *jobs.Job) (jobID string, err error) {
+func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job, jobOptions ...neoq.JobOption) (jobID string, err error) {
+	options := neoq.JobOptions{}
+	for _, opt := range jobOptions {
+		opt(&options)
+	}
+
 	var queueChan chan *jobs.Job
 	var qc any
 	var ok bool
@@ -96,28 +101,34 @@ func (m *MemBackend) Enqueue(_ context.Context, job *jobs.Job) (jobID string, er
 		job.RunAfter = now
 	}
 
-	if job.Queue == "" {
-		err = jobs.ErrNoQueueSpecified
-		return
-	}
-
 	err = jobs.FingerprintJob(job)
 	if err != nil {
+		err = errors.Join(jobs.ErrCantGenerateFingerprint, err)
 		return
 	}
 
 	// if the job fingerprint is already known, don't queue the job
 	if _, found := m.fingerprints.Load(job.Fingerprint); found {
-		return jobs.DuplicateJobID, nil
+		if !options.Override {
+			return jobs.DuplicateJobID, jobs.ErrJobFingerprintConflict
+		}
+		oldJob, found := m.fingerprints.Swap(job.Fingerprint, job)
+		if found {
+			// Return the same JobID to make it the same as posgres
+			job.ID = oldJob.(*jobs.Job).ID
+		} else {
+			m.logger.Info("Expected to get job but none was returned for fingerprint %s", job.Fingerprint)
+		}
+		jobID = fmt.Sprint(job.ID)
+
+	} else {
+		m.fingerprints.Store(job.Fingerprint, job)
+		m.mu.Lock()
+		m.jobCount++
+		m.mu.Unlock()
+		job.ID = m.jobCount
+		jobID = fmt.Sprint(m.jobCount)
 	}
-
-	m.fingerprints.Store(job.Fingerprint, job)
-	m.mu.Lock()
-	m.jobCount++
-	m.mu.Unlock()
-
-	job.ID = m.jobCount
-	jobID = fmt.Sprint(m.jobCount)
 
 	if job.RunAfter.Equal(now) {
 		queueChan <- job

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends"
 	"github.com/acaloiaro/neoq/backends/postgres"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
@@ -24,6 +25,7 @@ import (
 
 const (
 	ConcurrentWorkers = 8
+	queue1            = "queue1"
 )
 
 var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
@@ -245,7 +247,7 @@ func TestDuplicateJobRejection(t *testing.T) {
 	})
 
 	// we submitted two duplicate jobs; the error should be a duplicate job error
-	if !errors.Is(e2, postgres.ErrDuplicateJob) {
+	if !errors.Is(e2, jobs.ErrJobFingerprintConflict) {
 		err = e2
 	}
 
@@ -772,4 +774,19 @@ func Test_ConnectionTimeout(t *testing.T) {
 	if !errors.Is(err, postgres.ErrExceededConnectionPoolTimeout) {
 		t.Error(err)
 	}
+}
+
+func SetupSuite(t *testing.T) (neoq.Neoq, context.Context) {
+	connString, _ := prepareAndCleanupDB(t)
+
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nq, ctx
+}
+func TestSuite(t *testing.T) {
+	n, _ := SetupSuite(t)
+	backends.NewNeoQTestSuite(n).Run(t)
 }
