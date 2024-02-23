@@ -146,7 +146,7 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 
 	err = p.initializeDB()
 	if err != nil {
-		return
+		return nil, fmt.Errorf("unable to initialize jobs database: %w", err)
 	}
 
 	if p.pool == nil { //nolint: nestif
@@ -175,13 +175,14 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 
 		p.pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
-			return
+			return nil, fmt.Errorf("unable to create worker connection pool: %w", err)
 		}
 	}
 
 	p.listenerConn, err = p.newListenerConn(ctx)
 	if err != nil {
 		p.logger.Error("unable to initialize listener connection", slog.Any("error", err))
+		return nil, fmt.Errorf("unable to create neoq listener connection: %w", err)
 	}
 
 	// monitor handlers for changes and LISTEN when new queues are added
