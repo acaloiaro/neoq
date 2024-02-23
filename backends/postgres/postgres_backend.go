@@ -382,6 +382,18 @@ func (p *PgBackend) initializeDB() (err error) {
 	return nil
 }
 
+func isUniqueConflict(err error) bool {
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgerrcode.UniqueViolation {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Enqueue adds jobs to the specified queue
 func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job, jobOptions ...neoq.JobOption) (jobID string, err error) {
 	options := neoq.JobOptions{}
@@ -414,16 +426,17 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job, jobOptions ...ne
 	// the tx commits successfully, this is a no-op
 	defer func(ctx context.Context) { _ = tx.Rollback(ctx) }(ctx) // rollback has no effect if the transaction has been committed
 	jobID, err = p.enqueueJob(ctx, tx, job, options)
+
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			if pgErr.Code == pgerrcode.UniqueViolation {
-				err = jobs.ErrJobFingerprintConflict
-				return
-			}
+		if isUniqueConflict(err) {
+			err = jobs.ErrJobFingerprintConflict
+			return
 		}
 		p.logger.Error("error enqueueing job", slog.String("queue", job.Queue), slog.Any("error", err))
 		err = fmt.Errorf("error enqueuing job: %w", err)
+		if err != nil {
+			return
+		}
 	}
 
 	err = tx.Commit(ctx)
@@ -557,19 +570,16 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job, opti
 	err = jobs.FingerprintJob(j)
 	if err != nil {
 		return jobID,
-			fmt.Errorf("%w: %v", jobs.ErrCantGenerateFingerprint, err)
+			fmt.Errorf("%w: %s", jobs.ErrCantGenerateFingerprint, err.Error())
 	}
 	p.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
-	if !options.Override {
-		err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
+	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-			j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
-	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
-		VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (queue, status, fingerprint, ran_at) DO
-		UPDATE SET 
-		payload=$3, run_after=$4, deadline=$5, max_retries=$6		
-		RETURNING id`,
+		j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
+	if err != nil && options.Override {
+		err = tx.QueryRow(ctx, `UPDATE neoq_jobs set payload=$3, run_after=$4, deadline=$5, max_retries=$6, retries=0	
+			WHERE queue = $1 and fingerprint = $2 				
+			RETURNING id`,
 			j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
 		if err != nil {
 			p.logger.Error("error enqueueing override job", slog.Any("error", err))
