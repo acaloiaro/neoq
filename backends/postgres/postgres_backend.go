@@ -576,9 +576,9 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job, opti
 	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
-	if err != nil && options.Override {
+	if isUniqueConflict(err) && options.Override {
 		err = tx.QueryRow(ctx, `UPDATE neoq_jobs set payload=$3, run_after=$4, deadline=$5, max_retries=$6, retries=0	
-			WHERE queue = $1 and fingerprint = $2 				
+			WHERE queue = $1 and fingerprint = $2 and status != "processed"				
 			RETURNING id`,
 			j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
 		if err != nil {
