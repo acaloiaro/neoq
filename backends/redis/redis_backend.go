@@ -179,7 +179,12 @@ func WithShutdownTimeout(timeout time.Duration) neoq.ConfigOption {
 }
 
 // Enqueue queues jobs to be executed asynchronously
-func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
+func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job, jobOptions ...neoq.JobOption) (jobID string, err error) {
+	options := neoq.JobOptions{}
+	for _, opt := range jobOptions {
+		opt(&options)
+	}
+
 	if job.Queue == "" {
 		err = jobs.ErrNoQueueSpecified
 		return
@@ -194,6 +199,12 @@ func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string
 	payload, err = json.Marshal(job.Payload)
 	if err != nil {
 		return
+	}
+	if options.Override {
+		err = b.inspector.DeleteTask(job.Queue, job.Fingerprint)
+		if errors.Is(err, asynq.ErrTaskNotFound) {
+			b.logger.Debug("Overriding a task that does not exists queue:[%s] Fingerprint: [%s]", job.Queue, job.Fingerprint)
+		}
 	}
 	task := asynq.NewTask(job.Queue, payload)
 	_, err = b.client.EnqueueContext(ctx, task, jobToTaskOptions(job)...)

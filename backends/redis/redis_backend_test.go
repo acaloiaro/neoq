@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/testutils"
 	"github.com/hibiken/asynq"
+	"github.com/stretchr/testify/suite"
 )
 
 const (
@@ -440,4 +442,27 @@ result_loop:
 	if err != nil {
 		t.Error(err)
 	}
+}
+
+func TestSuite(t *testing.T) {
+	connString := os.Getenv("TEST_REDIS_URL")
+	if connString == "" {
+		t.Skip("Skipping: TEST_REDIS_URL not set")
+		return
+	}
+
+	password := os.Getenv("REDIS_PASSWORD")
+	ctx := context.Background()
+	nq, err := neoq.New(
+		ctx,
+		neoq.WithBackend(Backend),
+		WithAddr(connString),
+		WithPassword(password),
+		WithShutdownTimeout(500*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := backends.NewNeoQTestSuite(nq)
+	suite.Run(t, s)
 }

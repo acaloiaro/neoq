@@ -362,7 +362,13 @@ func (p *PgBackend) initializeDB() (err error) {
 		sslMode)
 	m, err := migrate.NewWithSourceInstance("iofs", migrations, pqConnectionString)
 	if err != nil {
-		p.logger.Error("unable to run migrations", slog.Any("error", err))
+		pqConnectionString = fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s&x-migrations-table=neoq_schema_migrations",
+			pgxCfg.User,
+			"*******",
+			pgxCfg.Host,
+			pgxCfg.Database,
+			sslMode)
+		p.logger.Error("unable to run migrations", slog.Any("error", err), slog.Any("url", pqConnectionString))
 		return
 	}
 	// We don't need the migration tooling to hold it's connections to the DB once it has been completed.
@@ -377,8 +383,24 @@ func (p *PgBackend) initializeDB() (err error) {
 	return nil
 }
 
+func isUniqueConflict(err error) bool {
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgerrcode.UniqueViolation {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Enqueue adds jobs to the specified queue
-func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
+func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job, jobOptions ...neoq.JobOption) (jobID string, err error) {
+	options := neoq.JobOptions{}
+	for _, opt := range jobOptions {
+		opt(&options)
+	}
 	if job.Queue == "" {
 		err = jobs.ErrNoQueueSpecified
 		return
@@ -404,18 +426,18 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 	// Rollback is safe to call even if the tx is already closed, so if
 	// the tx commits successfully, this is a no-op
 	defer func(ctx context.Context) { _ = tx.Rollback(ctx) }(ctx) // rollback has no effect if the transaction has been committed
-	jobID, err = p.enqueueJob(ctx, tx, job)
+	jobID, err = p.enqueueJob(ctx, tx, job, options)
+
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			if pgErr.Code == pgerrcode.UniqueViolation {
-				err = ErrDuplicateJob
-				return
-			}
+		if isUniqueConflict(err) {
+			err = jobs.ErrJobFingerprintConflict
+			return
 		}
 		p.logger.Error("error enqueueing job", slog.String("queue", job.Queue), slog.Any("error", err))
 		err = fmt.Errorf("error enqueuing job: %w", err)
-		return
+		if err != nil {
+			return
+		}
 	}
 
 	err = tx.Commit(ctx)
@@ -545,18 +567,56 @@ func (p *PgBackend) Shutdown(ctx context.Context) {
 //
 // Jobs that are not already fingerprinted are fingerprinted before being added
 // Duplicate jobs are not added to the queue. Any two unprocessed jobs with the same fingerprint are duplicates
-func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (jobID string, err error) {
+func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job, options neoq.JobOptions) (jobID string, err error) {
 	err = jobs.FingerprintJob(j)
 	if err != nil {
-		return
+		return jobID,
+			fmt.Errorf("%w: %s", jobs.ErrCantGenerateFingerprint, err.Error())
+	}
+	p.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
+	var query string
+	didUpdate := false
+	if options.Override {
+		var rows pgx.Rows
+		query = `
+			UPDATE neoq_jobs 
+			SET 
+				payload = $3,
+				run_after = $4,
+				deadline = $5,
+				max_retries = $6,
+				status = $7
+			WHERE 
+				queue = $1 AND
+				fingerprint = $2 AND
+				status != $8
+			RETURNING id`
+		rows, err = tx.Query(ctx, query,
+			j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries, internal.JobStatusNew, internal.JobStatusProcessed)
+		if rows != nil {
+			defer rows.Close()
+			if err == nil && rows.Next() {
+				didUpdate = true
+				err = rows.Scan(&jobID)
+			}
+		}
+	}
+	if !didUpdate { // This will always run unless the Override is set and an update was performed
+		query = `
+			INSERT INTO neoq_jobs (queue, fingerprint, payload, run_after, deadline, max_retries) 
+			VALUES ($1, $2, $3, $4, $5, $6) 
+			RETURNING id`
+		err = tx.QueryRow(ctx, query, j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
+	}
+	if err != nil {
+		p.logger.Error("error enqueueing override job", slog.Any("error", err))
+	}
+	if isUniqueConflict(err) && !options.Override {
+		err = fmt.Errorf("conflicting job: %w", err)
 	}
 
-	p.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
-	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
 	if err != nil {
-		err = fmt.Errorf("unable add job to queue: %w", err)
+		err = fmt.Errorf("unable add job to queue [%s] with fingerprint [%s]: %w", j.Queue, j.Fingerprint, err)
 		return
 	}
 
@@ -620,7 +680,7 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 
 	var runAfter time.Time
 	if status == internal.JobStatusFailed {
-		runAfter = internal.CalculateBackoff(job.Retries)
+		runAfter = internal.CalculateBackoff(job.Retries, job.RunAfter)
 		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3, retries = $4, run_after = $5 WHERE id = $6"
 		_, err = tx.Exec(ctx, qstr, time.Now().UTC(), errMsg, status, job.Retries, runAfter, job.ID)
 	} else {
@@ -861,6 +921,15 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 
 	job, err = p.getJob(ctx, tx, jobID)
 	if err != nil {
+		return
+	}
+
+	if job.RunAfter.After(time.Now()) {
+		p.logger.Error("Running a job too early.",
+			slog.String("queue", job.Queue),
+			slog.Int64("job_id", job.ID),
+			slog.String("duration", (-time.Since(job.RunAfter)).String()))
+		err = p.updateJob(ctx, fmt.Errorf("run to soon"))
 		return
 	}
 

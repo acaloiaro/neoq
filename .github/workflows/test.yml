@@ -37,7 +37,7 @@ jobs:
     container: golang:1.21
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: test
         run: make mod test coverage
         env:
