@@ -573,21 +573,49 @@ func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job, opti
 			fmt.Errorf("%w: %s", jobs.ErrCantGenerateFingerprint, err.Error())
 	}
 	p.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
-	err = tx.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
-	if isUniqueConflict(err) && options.Override {
-		err = tx.QueryRow(ctx, `UPDATE neoq_jobs set payload=$3, run_after=$4, deadline=$5, max_retries=$6, retries=0	
-			WHERE queue = $1 and fingerprint = $2 and status != "processed"				
-			RETURNING id`,
-			j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
-		if err != nil {
-			p.logger.Error("error enqueueing override job", slog.Any("error", err))
+	var query string
+	didUpdate := false
+	if options.Override {
+		var rows pgx.Rows
+		query = `
+			UPDATE neoq_jobs 
+			SET 
+				payload = $3,
+				run_after = $4,
+				deadline = $5,
+				max_retries = $6,
+				status = $7
+			WHERE 
+				queue = $1 AND
+				fingerprint = $2 AND
+				status != $8
+			RETURNING id`
+		rows, err = tx.Query(ctx, query,
+			j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries, internal.JobStatusNew, internal.JobStatusProcessed)
+		if rows != nil {
+			defer rows.Close()
+			if err == nil && rows.Next() {
+				didUpdate = true
+				err = rows.Scan(&jobID)
+			}
 		}
+	}
+	if !didUpdate { // This will always run unless the Override is set and an update was performed
+		query = `
+			INSERT INTO neoq_jobs (queue, fingerprint, payload, run_after, deadline, max_retries) 
+			VALUES ($1, $2, $3, $4, $5, $6) 
+			RETURNING id`
+		err = tx.QueryRow(ctx, query, j.Queue, j.Fingerprint, j.Payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
+	}
+	if err != nil {
+		p.logger.Error("error enqueueing override job", slog.Any("error", err))
+	}
+	if isUniqueConflict(err) && !options.Override {
+		err = fmt.Errorf("conflicting job: %w", err)
 	}
 
 	if err != nil {
-		err = fmt.Errorf("unable add job to queue: %w", err)
+		err = fmt.Errorf("unable add job to queue [%s] with fingerprint [%s]: %w", j.Queue, j.Fingerprint, err)
 		return
 	}
 
@@ -893,6 +921,11 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 	job, err = p.getJob(ctx, tx, jobID)
 	if err != nil {
 		return
+	}
+
+	if job.RunAfter.After(time.Now()) {
+		p.logger.Error("Running a job too %s early.", -time.Since(job.RunAfter))
+		// return //
 	}
 
 	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
