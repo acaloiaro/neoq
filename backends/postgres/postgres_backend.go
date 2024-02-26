@@ -924,8 +924,11 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 	}
 
 	if job.RunAfter.After(time.Now()) {
-		p.logger.Error("Running a job too %s early.", -time.Since(job.RunAfter))
-		// return //
+		p.logger.Error("Running a job too early.",
+			slog.String("queue", job.Queue),
+			slog.Int64("job_id", job.ID),
+			slog.String("duration", (-time.Since(job.RunAfter)).String()))
+		return //
 	}
 
 	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
