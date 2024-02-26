@@ -679,7 +679,7 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 
 	var runAfter time.Time
 	if status == internal.JobStatusFailed {
-		runAfter = internal.CalculateBackoff(job.Retries)
+		runAfter = internal.CalculateBackoff(job.Retries, job.RunAfter)
 		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3, retries = $4, run_after = $5 WHERE id = $6"
 		_, err = tx.Exec(ctx, qstr, time.Now().UTC(), errMsg, status, job.Retries, runAfter, job.ID)
 	} else {
@@ -928,7 +928,8 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 			slog.String("queue", job.Queue),
 			slog.Int64("job_id", job.ID),
 			slog.String("duration", (-time.Since(job.RunAfter)).String()))
-		return //
+		err = p.updateJob(ctx, fmt.Errorf("run to soon"))
+		return
 	}
 
 	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
