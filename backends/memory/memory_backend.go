@@ -67,7 +67,7 @@ func Backend(_ context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, e
 }
 
 // Enqueue queues jobs to be executed asynchronously
-func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job, jobOptions ...neoq.JobOption) (jobID string, err error) {
+func (m *MemBackend) Enqueue(_ context.Context, job *jobs.Job, jobOptions ...neoq.JobOption) (jobID string, err error) {
 	options := neoq.JobOptions{}
 	for _, opt := range jobOptions {
 		opt(&options)

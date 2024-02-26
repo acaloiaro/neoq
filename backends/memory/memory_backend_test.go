@@ -19,6 +19,7 @@ import (
 	"github.com/acaloiaro/neoq/testutils"
 	"github.com/pkg/errors"
 	"github.com/robfig/cron"
+	"github.com/stretchr/testify/suite"
 	"golang.org/x/exp/slog"
 )
 
@@ -426,11 +427,16 @@ result_loop:
 	}
 }
 
-func TestSuite(t *testing.T) {
+func initQueue() (neoq.Neoq, error) {
 	ctx := context.Background()
-	n, err := neoq.New(ctx, neoq.WithBackend(memory.Backend), neoq.WithLogLevel(logging.LogLevelDebug))
+	return neoq.New(ctx, neoq.WithBackend(memory.Backend), neoq.WithLogLevel(logging.LogLevelDebug)) //nolint: error
+}
+
+func TestSuite(t *testing.T) {
+	n, err := initQueue()
 	if err != nil {
 		t.Fatal(err)
 	}
-	backends.NewNeoQTestSuite(n).Run(t)
+	s := backends.NewNeoQTestSuite(n)
+	suite.Run(t, s)
 }
