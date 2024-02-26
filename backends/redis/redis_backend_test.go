@@ -16,6 +16,7 @@ import (
 	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/testutils"
 	"github.com/hibiken/asynq"
+	"github.com/stretchr/testify/suite"
 )
 
 const (
@@ -462,5 +463,6 @@ func TestSuite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	backends.NewNeoQTestSuite(nq).Run(t)
+	s := backends.NewNeoQTestSuite(nq)
+	suite.Run(t, s)
 }

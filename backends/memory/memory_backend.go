@@ -67,7 +67,7 @@ func Backend(_ context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, e
 }
 
 // Enqueue queues jobs to be executed asynchronously
-func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job, jobOptions ...neoq.JobOption) (jobID string, err error) {
+func (m *MemBackend) Enqueue(_ context.Context, job *jobs.Job, jobOptions ...neoq.JobOption) (jobID string, err error) {
 	options := neoq.JobOptions{}
 	for _, opt := range jobOptions {
 		opt(&options)
@@ -120,7 +120,6 @@ func (m *MemBackend) Enqueue(ctx context.Context, job *jobs.Job, jobOptions ...n
 			m.logger.Info("Expected to get job but none was returned for fingerprint %s", job.Fingerprint)
 		}
 		jobID = fmt.Sprint(job.ID)
-
 	} else {
 		m.fingerprints.Store(job.Fingerprint, job)
 		m.mu.Lock()
@@ -260,7 +259,7 @@ func (m *MemBackend) start(ctx context.Context, queue string) (err error) {
 
 					m.logger.Error("job failed", slog.Int64("job_id", job.ID), slog.Any("error", err))
 
-					runAfter := internal.CalculateBackoff(job.Retries)
+					runAfter := internal.CalculateBackoff(job.Retries, job.RunAfter)
 					job.RunAfter = runAfter
 					job.Status = internal.JobStatusFailed
 					m.queueFutureJob(job)

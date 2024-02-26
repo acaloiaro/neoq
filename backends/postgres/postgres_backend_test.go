@@ -21,6 +21,7 @@ import (
 	"github.com/acaloiaro/neoq/testutils"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/suite"
 )
 
 const (
@@ -776,17 +777,20 @@ func Test_ConnectionTimeout(t *testing.T) {
 	}
 }
 
-func SetupSuite(t *testing.T) (neoq.Neoq, context.Context) {
+func initQueue(t *testing.T) (neoq.Neoq, error) {
+	t.Helper()
 	connString, _ := prepareAndCleanupDB(t)
-
-	ctx := context.TODO()
-	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	nq, err := neoq.New(context.Background(), neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	if err != nil {
+		err = fmt.Errorf("Failed to create queue %w", err)
+	}
+	return nq, err
+}
+func TestSuite(t *testing.T) {
+	n, err := initQueue(t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return nq, ctx
-}
-func TestSuite(t *testing.T) {
-	n, _ := SetupSuite(t)
-	backends.NewNeoQTestSuite(n).Run(t)
+	s := backends.NewNeoQTestSuite(n)
+	suite.Run(t, s)
 }
