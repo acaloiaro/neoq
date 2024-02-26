@@ -183,6 +183,7 @@ results_loop:
 
 func makeHandler(s *NeoQTestSuite, done chan bool) handler.Handler {
 	return handler.New(testQueue, func(ctx context.Context) (err error) {
+		s.T().Helper()
 		var j *jobs.Job
 		j, err = jobs.FromContext(ctx)
 		if !s.NoError(err) && !s.NotNil(j) {
