@@ -773,3 +773,55 @@ func Test_ConnectionTimeout(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestBasicJobProcessing tests that the postgres backend is able to process the most basic jobs with the
+// most basic configuration.
+func TestFutureJobProcessing(t *testing.T) {
+	connString, _ := prepareAndCleanupDB(t)
+	const queue = "testing"
+	done := make(chan bool)
+	defer close(done)
+
+	timeoutTimer := time.After(5 * time.Second)
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+	job := &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+		RunAfter: time.Now().Add(time.Second * 1),
+	}
+	jid, e := nq.Enqueue(ctx, job)
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+	if err != nil {
+		t.Error(err)
+	}
+
+	if time.Now().Before(job.RunAfter) {
+		t.Error("job ran before RunAfter")
+	}
+}
