@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -823,5 +824,178 @@ func TestFutureJobProcessing(t *testing.T) {
 
 	if time.Now().Before(job.RunAfter) {
 		t.Error("job ran before RunAfter")
+	}
+}
+
+func TestGetPQConnectionString(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "standard input",
+			input:   "postgres://username:password@hostname:5432/database",
+			want:    "postgres://username:password@hostname:5432/database?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "standard input with postgresql scheme",
+			input:   "postgresql://username:password@hostname:5432/database",
+			want:    "postgresql://username:password@hostname:5432/database?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "no port number",
+			input:   "postgres://username:password@hostname/database",
+			want:    "postgres://username:password@hostname/database?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "custom port number",
+			input:   "postgres://username:password@hostname:1234/database",
+			want:    "postgres://username:password@hostname:1234/database?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "custom sslmode=disable",
+			input:   "postgres://username:password@hostname:5432/database?sslmode=disable",
+			want:    "postgres://username:password@hostname:5432/database?sslmode=disable&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "custom sslmode=allow",
+			input:   "postgres://username:password@hostname:5432/database?sslmode=allow",
+			want:    "postgres://username:password@hostname:5432/database?sslmode=allow&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "custom sslmode=prefer",
+			input:   "postgres://username:password@hostname:5432/database?sslmode=prefer",
+			want:    "postgres://username:password@hostname:5432/database?sslmode=prefer&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "custom sslmode=require",
+			input:   "postgres://username:password@hostname:5432/database?sslmode=require",
+			want:    "postgres://username:password@hostname:5432/database?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "custom sslmode=verify-ca",
+			input:   "postgres://username:password@hostname:5432/database?sslmode=verify-ca",
+			want:    "postgres://username:password@hostname:5432/database?sslmode=verify-ca&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "custom sslmode=verify-full",
+			input:   "postgres://username:password@hostname:5432/database?sslmode=verify-full",
+			want:    "postgres://username:password@hostname:5432/database?sslmode=verify-full&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:  "encoded password is preserved",
+			input: "postgres://username:pass%21%40%23$%25%5E&%2A%28%29%3A%2F%3Fword@hostname:5432/database",
+			want: fmt.Sprintf(
+				"postgres://%s@hostname:5432/database?sslmode=require&x-migrations-table=neoq_schema_migrations",
+				url.UserPassword("username", "pass!@#$%^&*():/?word").String(),
+			),
+			wantErr: false,
+		},
+		{
+			name:    "multiple hostnames",
+			input:   "postgres://username:password@hostname1,hostname2,hostname3:5432/database",
+			want:    "postgres://username:password@hostname1,hostname2,hostname3:5432/database?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+
+		// Examples connstrings from https://www.postgresql.org/docs/16/libpq-connect.html
+		{
+			name:    "valid empty postgresql scheme input",
+			input:   "postgresql://",
+			want:    "postgresql:?sslmode=disable&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "hostname localhost",
+			input:   "postgresql://localhost",
+			want:    "postgresql://localhost?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "hostname localhost with custom port",
+			input:   "postgresql://localhost:5433",
+			want:    "postgresql://localhost:5433?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "non-default database",
+			input:   "postgresql://localhost/mydb",
+			want:    "postgresql://localhost/mydb?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "username",
+			input:   "postgresql://user@localhost",
+			want:    "postgresql://user@localhost?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "username and password",
+			input:   "postgresql://user:secret@localhost",
+			want:    "postgresql://user:secret@localhost?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "custom params are ignored",
+			input:   "postgresql://other@localhost/otherdb?connect_timeout=10&application_name=myapp",
+			want:    "postgresql://other@localhost/otherdb?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "multiple hostnames and ports",
+			input:   "postgresql://host1:123,host2:456/somedb?target_session_attrs=any&application_name=myapp",
+			want:    "postgresql://host1:123,host2:456/somedb?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			wantErr: false,
+		},
+		{
+			name:    "pq-style input is returned as-is",
+			input:   "host=localhost port=5432 dbname=mydb connect_timeout=10",
+			want:    "host=localhost port=5432 dbname=mydb connect_timeout=10",
+			wantErr: false,
+		},
+
+		// Inputs that cause errors
+		{
+			name:    "non-postgres scheme returns error",
+			input:   "https://user:password@example.com:443/path?query=true",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "empty input returns error",
+			input:   "",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "custom bad sslmode=foo returns error",
+			input:   "postgres://username:password@hostname:1234/database?sslmode=foo",
+			want:    "",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := postgres.GetPQConnectionString(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetPQConnectionString() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("GetPQConnectionString()\ngot  = %v\nwant = %v", got, tt.want)
+			}
+		})
 	}
 }

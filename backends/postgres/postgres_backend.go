@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +33,9 @@ import (
 var migrationsFS embed.FS
 
 const (
+	queryParamSSLMode         = "sslmode"
+	queryParamMigrationsTable = "x-migrations-table"
+
 	JobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE id = $1
@@ -324,6 +326,7 @@ func txFromContext(ctx context.Context) (t pgx.Tx, err error) {
 func (p *PgBackend) initializeDB() (err error) {
 	migrations, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
+		err = fmt.Errorf("unable to run migrations, error during iofs new: %w", err)
 		p.logger.Error("unable to run migrations", slog.Any("error", err))
 		return
 	}
@@ -332,36 +335,16 @@ func (p *PgBackend) initializeDB() (err error) {
 	// it with pgx-specific config params like `max_conn_count`. However, `go-migrate` uses `pq` under the hood, and
 	// these `pgx` config params cause `pq` to throw an "unknown config parameter" error when they're encountered.
 	// So we must first sanitize connection strings for pq
-	var pgxCfg *pgx.ConnConfig
-	pgxCfg, err = pgx.ParseConfig(p.config.ConnectionString)
+	pqConnectionString, err := GetPQConnectionString(p.config.ConnectionString)
 	if err != nil {
+		err = fmt.Errorf("unable to run migrations, error parsing connection string: %w", err)
 		p.logger.Error("unable to run migrations", slog.Any("error", err))
 		return
 	}
 
-	// nil TLSConfig means "sslmode=disable" was set on the connection
-	sslMode := "verify-ca"
-	if pgxCfg.TLSConfig == nil {
-		sslMode = "disable"
-	} else if pgxCfg.TLSConfig.InsecureSkipVerify {
-		sslMode = "require"
-	}
-	if dbURL, err := url.Parse(pgxCfg.ConnString()); err == nil &&
-		strings.HasPrefix(dbURL.Scheme, "postgres") {
-		val := dbURL.Query()
-		if v := val.Get("sslmode"); v != "" {
-			sslMode = v // set sslmode from existing connection string
-		}
-	}
-
-	pqConnectionString := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s&x-migrations-table=neoq_schema_migrations",
-		pgxCfg.User,
-		url.QueryEscape(pgxCfg.Password),
-		pgxCfg.Host,
-		pgxCfg.Database,
-		sslMode)
 	m, err := migrate.NewWithSourceInstance("iofs", migrations, pqConnectionString)
 	if err != nil {
+		err = fmt.Errorf("unable to run migrations, could not create new source: %w", err)
 		p.logger.Error("unable to run migrations", slog.Any("error", err))
 		return
 	}
@@ -370,6 +353,7 @@ func (p *PgBackend) initializeDB() (err error) {
 
 	err = m.Up()
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		err = fmt.Errorf("unable to run migrations, could not apply up migration: %w", err)
 		p.logger.Error("unable to run migrations", slog.Any("error", err))
 		return
 	}
@@ -1029,4 +1013,52 @@ func (p *PgBackend) acquire(ctx context.Context) (conn *pgxpool.Conn, err error)
 // withJobContext creates a new context with the Job set
 func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
 	return context.WithValue(ctx, internal.JobCtxVarKey, j)
+}
+
+func GetPQConnectionString(connectionString string) (string, error) {
+	pgxCfg, err := pgx.ParseConfig(connectionString)
+	if err != nil {
+		return "", fmt.Errorf("unable to parse connection string %s: %w", connectionString, err)
+	}
+
+	dbURI, err := url.Parse(pgxCfg.ConnString())
+	if err != nil {
+		return "", fmt.Errorf("unable to parse connection string %s: %w", connectionString, err)
+	}
+
+	if dbURI.String() == "" {
+		return "", fmt.Errorf("connection string cannot be empty")
+	}
+
+	scheme := dbURI.Scheme
+	if scheme == "" {
+		// This is probably a pq-style string, return it as-is
+		return connectionString, nil
+	}
+
+	if scheme != "postgres" && scheme != "postgresql" {
+		// This isn't a postgresql URI-style string (postgres://hostname/db)
+		return "", fmt.Errorf("only postgres and postgresql scheme URIs are supported, invalid connection string: %s", connectionString)
+	}
+
+	sslMode := "verify-ca"
+	if pgxCfg.TLSConfig == nil {
+		sslMode = "disable"
+	} else if pgxCfg.TLSConfig.InsecureSkipVerify {
+		sslMode = "require"
+	}
+
+	// Prefer original sslmode if it was set
+	originalSSLMode := dbURI.Query().Get(queryParamSSLMode)
+	if originalSSLMode != "" {
+		sslMode = originalSSLMode
+	}
+
+	// Clear out original query, use only query params that are pq compatible
+	query := url.Values{}
+	query.Set(queryParamSSLMode, sslMode)
+	query.Set(queryParamMigrationsTable, "neoq_schema_migrations")
+	dbURI.RawQuery = query.Encode()
+
+	return dbURI.String(), nil
 }
