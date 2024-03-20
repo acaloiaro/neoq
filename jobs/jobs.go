@@ -9,8 +9,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/acaloiaro/neoq/internal"
 	"github.com/guregu/null"
+	"github.com/pranavmodx/neoq-sqlite/internal"
 )
 
 var (

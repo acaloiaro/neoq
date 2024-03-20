@@ -10,11 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/acaloiaro/neoq"
-	"github.com/acaloiaro/neoq/handler"
-	"github.com/acaloiaro/neoq/internal"
-	"github.com/acaloiaro/neoq/jobs"
-	"github.com/acaloiaro/neoq/logging"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres" // nolint: revive
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -24,6 +19,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
+	"github.com/pranavmodx/neoq-sqlite"
+	"github.com/pranavmodx/neoq-sqlite/handler"
+	"github.com/pranavmodx/neoq-sqlite/internal"
+	"github.com/pranavmodx/neoq-sqlite/jobs"
+	"github.com/pranavmodx/neoq-sqlite/logging"
 	"github.com/robfig/cron"
 	"golang.org/x/exp/slices"
 	"golang.org/x/exp/slog"

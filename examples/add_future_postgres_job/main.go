@@ -5,9 +5,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/acaloiaro/neoq"
-	"github.com/acaloiaro/neoq/backends/postgres"
-	"github.com/acaloiaro/neoq/jobs"
+	"github.com/pranavmodx/neoq-sqlite"
+	"github.com/pranavmodx/neoq-sqlite/backends/postgres"
+	"github.com/pranavmodx/neoq-sqlite/jobs"
 )
 
 func main() {

@@ -4,10 +4,10 @@ import (
 	"context"
 	"log"
 
-	"github.com/acaloiaro/neoq"
-	"github.com/acaloiaro/neoq/backends/redis"
-	"github.com/acaloiaro/neoq/handler"
-	"github.com/acaloiaro/neoq/jobs"
+	"github.com/pranavmodx/neoq-sqlite"
+	"github.com/pranavmodx/neoq-sqlite/backends/redis"
+	"github.com/pranavmodx/neoq-sqlite/handler"
+	"github.com/pranavmodx/neoq-sqlite/jobs"
 )
 
 func main() {

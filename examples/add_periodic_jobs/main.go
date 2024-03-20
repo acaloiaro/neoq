@@ -5,9 +5,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/acaloiaro/neoq"
-	"github.com/acaloiaro/neoq/backends/memory"
-	"github.com/acaloiaro/neoq/handler"
+	"github.com/pranavmodx/neoq-sqlite"
+	"github.com/pranavmodx/neoq-sqlite/backends/memory"
+	"github.com/pranavmodx/neoq-sqlite/handler"
 )
 
 func main() {

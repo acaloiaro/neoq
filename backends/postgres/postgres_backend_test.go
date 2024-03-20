@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acaloiaro/neoq"
-	"github.com/acaloiaro/neoq/backends/postgres"
-	"github.com/acaloiaro/neoq/handler"
-	"github.com/acaloiaro/neoq/internal"
-	"github.com/acaloiaro/neoq/jobs"
-	"github.com/acaloiaro/neoq/logging"
-	"github.com/acaloiaro/neoq/testutils"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pranavmodx/neoq-sqlite"
+	"github.com/pranavmodx/neoq-sqlite/backends/postgres"
+	"github.com/pranavmodx/neoq-sqlite/handler"
+	"github.com/pranavmodx/neoq-sqlite/internal"
+	"github.com/pranavmodx/neoq-sqlite/jobs"
+	"github.com/pranavmodx/neoq-sqlite/logging"
+	"github.com/pranavmodx/neoq-sqlite/testutils"
 )
 
 const (

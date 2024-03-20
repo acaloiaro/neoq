@@ -5,9 +5,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/acaloiaro/neoq/handler"
-	"github.com/acaloiaro/neoq/jobs"
-	"github.com/acaloiaro/neoq/logging"
+	"github.com/pranavmodx/neoq-sqlite/handler"
+	"github.com/pranavmodx/neoq-sqlite/jobs"
+	"github.com/pranavmodx/neoq-sqlite/logging"
 )
 
 const (

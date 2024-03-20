@@ -1,4 +1,4 @@
-module github.com/acaloiaro/neoq
+module github.com/pranavmodx/neoq-sqlite
 
 go 1.21
 
