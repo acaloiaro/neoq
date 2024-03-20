@@ -1,0 +1,456 @@
+package sqlite
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/pranavmodx/neoq-sqlite"
+	"github.com/pranavmodx/neoq-sqlite/handler"
+	"github.com/pranavmodx/neoq-sqlite/internal"
+	"github.com/pranavmodx/neoq-sqlite/jobs"
+	"github.com/pranavmodx/neoq-sqlite/logging"
+	"github.com/robfig/cron"
+)
+
+const (
+	JobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
+					FROM neoq_jobs
+					WHERE id = $1
+					AND status NOT IN ('processed')
+					FOR UPDATE SKIP LOCKED
+					LIMIT 1`
+	PendingJobIDQuery = `SELECT id
+					FROM neoq_jobs
+					WHERE queue = $1
+					AND status NOT IN ('processed')
+					AND run_after <= NOW()
+					FOR UPDATE SKIP LOCKED
+					LIMIT 1`
+	FutureJobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
+					FROM neoq_jobs
+					WHERE queue = $1
+					AND status NOT IN ('processed')
+					AND run_after > NOW()
+					ORDER BY run_after ASC
+					LIMIT 100
+					FOR UPDATE SKIP LOCKED`
+	shutdownJobID = "-1" // job ID announced when triggering a shutdown
+)
+
+type SqliteBackend struct {
+	neoq.Neoq
+	cancelFuncs  []context.CancelFunc       // cancel functions to be called upon Shutdown()
+	config       *neoq.Config               // backend configuration
+	cron         *cron.Cron                 // scheduler for periodic jobs
+	futureJobs   map[string]*jobs.Job       // map of future job IDs to the corresponding job record
+	handlers     map[string]handler.Handler // a map of queue names to queue handlers
+	newQueues    chan string                // a channel that indicates that new queues are ready to be processed
+	readyQueues  chan string                // a channel that indicates which queues are ready to have jobs processed.
+	listenerChan chan string                // PS::listens for enqueued jobs to be processed
+	logger       logging.Logger             // backend-wide logger
+	mu           *sync.RWMutex              // protects concurrent access to fields on SqliteBackend
+}
+
+// Enqueue adds jobs to the specified queue
+func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
+	// if job.Queue == "" {
+	// 	err = jobs.ErrNoQueueSpecified
+	// 	return
+	// }
+
+	// s.logger.Debug("enqueueing job payload", slog.String("queue", job.Queue), slog.Any("job_payload", job.Payload))
+
+	// s.logger.Debug("acquiring new connection from connection pool", slog.String("queue", job.Queue))
+	// conn, err := s.acquire(ctx)
+	// if err != nil {
+	// 	err = fmt.Errorf("error acquiring connection: %w", err)
+	// 	return
+	// }
+	// defer conn.Release()
+
+	// s.logger.Debug("beginning new transaction to enqueue job", slog.String("queue", job.Queue))
+	// tx, err := conn.Begin(ctx)
+	// if err != nil {
+	// 	err = fmt.Errorf("error creating transaction: %w", err)
+	// 	return
+	// }
+
+	// // Rollback is safe to call even if the tx is already closed, so if
+	// // the tx commits successfully, this is a no-op
+	// defer func(ctx context.Context) { _ = tx.Rollback(ctx) }(ctx) // rollback has no effect if the transaction has been committed
+	// jobID, err = s.enqueueJob(ctx, tx, job)
+	// if err != nil {
+	// 	var pgErr *pgconn.PgError
+	// 	if errors.As(err, &pgErr) {
+	// 		if pgErr.Code == pgerrcode.UniqueViolation {
+	// 			err = ErrDuplicateJob
+	// 			return
+	// 		}
+	// 	}
+	// 	s.logger.Error("error enqueueing job", slog.String("queue", job.Queue), slog.Any("error", err))
+	// 	err = fmt.Errorf("error enqueuing job: %w", err)
+	// 	return
+	// }
+
+	// err = tx.Commit(ctx)
+	// if err != nil {
+	// 	err = fmt.Errorf("error committing transaction: %w", err)
+	// 	return
+	// }
+	// s.logger.Debug("job added to queue:", slog.String("queue", job.Queue), slog.String("job_id", jobID))
+
+	// // add future jobs to the future job list
+	// if job.RunAfter.After(time.Now().UTC()) {
+	// 	s.mu.Lock()
+	// 	s.futureJobs[jobID] = job
+	// 	s.mu.Unlock()
+	// 	s.logger.Debug(
+	// 		"added job to future jobs list",
+	// 		slog.String("queue", job.Queue),
+	// 		slog.String("job_id", jobID),
+	// 		slog.Time("run_after", job.RunAfter),
+	// 	)
+	// }
+
+	return "-1", nil
+}
+
+// Start starts processing jobs with the specified queue and handler
+func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error) {
+	ctx, cancel := context.WithCancel(ctx)
+
+	s.logger.Debug("starting job processing", slog.String("queue", h.Queue))
+	s.mu.Lock()
+	s.cancelFuncs = append(s.cancelFuncs, cancel)
+	s.handlers[h.Queue] = h
+	s.mu.Unlock()
+
+	s.newQueues <- h.Queue
+
+	err = s.start(ctx, h)
+	if err != nil {
+		s.logger.Error("unable to start processing queue", slog.String("queue", h.Queue), slog.Any("error", err))
+		return
+	}
+	return
+}
+
+// start starts processing new, pending, and future jobs
+func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error) {
+	var ok bool
+	var listenJobChan chan string
+	var errCh chan error
+
+	if h, ok = s.handlers[h.Queue]; !ok {
+		return fmt.Errorf("%w: %s", handler.ErrNoHandlerForQueue, h.Queue)
+	}
+
+	pendingJobsChan := s.pendingJobs(ctx, h.Queue) // process overdue jobs *at startup*
+
+	// wait for the listener to be ready to listen
+	for q := range s.readyQueues {
+		if q == h.Queue {
+			listenJobChan, errCh = s.listen(ctx)
+			break
+		}
+
+		s.logger.Debug("Picked up a queue that a different start() will be waiting for. Adding back to ready list",
+			slog.String("queue", q))
+		s.readyQueues <- q
+	}
+
+	// process all future jobs and retries
+	go func() { s.scheduleFutureJobs(ctx, h.Queue) }()
+
+	for i := 0; i < h.Concurrency; i++ {
+		go func() {
+			var err error
+			var n string
+
+			for {
+				select {
+				case n = <-listenJobChan:
+					err = s.handleJob(ctx, n)
+				case n = <-pendingJobsChan:
+					err = s.handleJob(ctx, n)
+				case <-ctx.Done():
+					return
+				case <-errCh:
+					s.logger.Error("error hanlding job", "error", err)
+					continue
+				}
+
+				if err != nil {
+					if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
+						err = nil
+						continue
+					}
+
+					s.logger.Error(
+						"job failed",
+						slog.String("queue", h.Queue),
+						slog.Any("error", err),
+						slog.String("job_id", n),
+					)
+
+					continue
+				}
+			}
+		}()
+	}
+
+	return nil
+}
+
+func (s *SqliteBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan string) {
+	jobsCh = make(chan string)
+
+	go func(ctx context.Context) {
+		for {
+			jobID, err := s.getPendingJobID(ctx, queue)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
+					break
+				}
+
+				s.logger.Error(
+					"failed to fetch pending job",
+					slog.String("queue", queue),
+					slog.Any("error", err),
+					slog.String("job_id", jobID),
+				)
+			} else {
+				jobsCh <- jobID
+			}
+		}
+	}(ctx)
+
+	return jobsCh
+}
+
+func (s *SqliteBackend) getPendingJobID(ctx context.Context, queue string) (jobID string, err error) {
+	// err = conn.QueryRow(ctx, PendingJobIDQuery, queue).Scan(&jobID)
+	return
+}
+
+func (s *SqliteBackend) listen(ctx context.Context) (c chan string, errCh chan error) {
+	c = make(chan string)
+	errCh = make(chan error)
+
+	go func(ctx context.Context) {
+		var notification string
+		for {
+			select {
+			case <-ctx.Done():
+				// our context has been canceled, the system is shutting down
+				return
+			default:
+				notification = <-s.listenerChan
+			}
+
+			s.logger.Debug(
+				"job notification for queue",
+				slog.Any("notification", notification),
+			)
+
+			// // check if Shutdown() has been called
+			// if notification.Payload == shutdownJobID {
+			// 	return
+			// }
+
+			c <- notification
+		}
+	}(ctx)
+
+	return c, errCh
+}
+
+func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error) {
+	var job *jobs.Job
+
+	job, err = s.getJob(ctx, jobID)
+	if err != nil {
+		return
+	}
+
+	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
+		err = jobs.ErrJobExceededDeadline
+		s.logger.Debug("job deadline is in the past, skipping", slog.String("queue", job.Queue), slog.Int64("job_id", job.ID))
+		err = s.updateJob(ctx, err)
+		return
+	}
+
+	// check if the job is being retried and increment retry count accordingly
+	if job.Status != internal.JobStatusNew {
+		job.Retries++
+	}
+
+	var jobErr error
+	h, ok := s.handlers[job.Queue]
+	if !ok {
+		s.logger.Error("received a job for which no handler is configured",
+			slog.String("queue", job.Queue),
+			slog.Int64("job_id", job.ID))
+		return handler.ErrNoHandlerForQueue
+	}
+
+	// execute the queue handler of this job
+	jobErr = handler.Exec(ctx, h)
+	err = s.updateJob(ctx, jobErr)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+
+		err = fmt.Errorf("error updating job status: %w", err)
+		return err
+	}
+
+	return nil
+}
+
+func (s *SqliteBackend) getJob(ctx context.Context, jobID string) (job *jobs.Job, err error) {
+	return
+}
+
+func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error) (err error) {
+	status := internal.JobStatusProcessed
+	errMsg := ""
+
+	if jobErr != nil {
+		s.logger.Error("job failed", slog.Any("job_error", jobErr))
+		status = internal.JobStatusFailed
+		errMsg = jobErr.Error()
+	}
+
+	var job *jobs.Job
+	if job, err = jobs.FromContext(ctx); err != nil {
+		return fmt.Errorf("error getting job from context: %w", err)
+	}
+
+	if job.MaxRetries != nil && job.Retries >= *job.MaxRetries {
+		err = s.moveToDeadQueue(ctx, job, errMsg)
+		return
+	}
+
+	var runAfter time.Time
+	if status == internal.JobStatusFailed {
+		runAfter = internal.CalculateBackoff(job.Retries)
+		// qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3, retries = $4, run_after = $5 WHERE id = $6"
+		// _, err = tx.Exec(ctx, qstr, time.Now().UTC(), errMsg, status, job.Retries, runAfter, job.ID)
+	} else {
+		// qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3 WHERE id = $4"
+		// _, err = tx.Exec(ctx, qstr, time.Now().UTC(), errMsg, status, job.ID)
+	}
+
+	if err != nil {
+		return
+	}
+
+	if time.Until(runAfter) > 0 {
+		s.mu.Lock()
+		s.futureJobs[fmt.Sprint(job.ID)] = job
+		s.mu.Unlock()
+	}
+
+	return nil
+}
+
+func (s *SqliteBackend) moveToDeadQueue(ctx context.Context, j *jobs.Job, jobErr string) (err error) {
+	// _, err = tx.Exec(ctx, "DELETE FROM neoq_jobs WHERE id = $1", j.ID)
+	// if err != nil {
+	// 	return
+	// }
+
+	// _, err = tx.Exec(ctx, `INSERT INTO neoq_dead_jobs(id, queue, fingerprint, payload, retries, max_retries, error, deadline)
+	// 	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+	// 	j.ID, j.Queue, j.Fingerprint, j.Payload, j.Retries, j.MaxRetries, jobErr, j.Deadline)
+
+	return
+}
+
+func (s *SqliteBackend) scheduleFutureJobs(ctx context.Context, queue string) {
+	err := s.initFutureJobs(ctx, queue)
+	if err != nil {
+		return
+	}
+
+	// check for new future jobs on an interval
+	ticker := time.NewTicker(s.config.JobCheckInterval)
+
+	for {
+		// loop over list of future jobs, scheduling goroutines to wait for jobs that are due within the next 30 seconds
+		s.mu.Lock()
+		for jobID, job := range s.futureJobs {
+			timeUntillRunAfter := time.Until(job.RunAfter)
+			if timeUntillRunAfter <= s.config.FutureJobWindow {
+				delete(s.futureJobs, jobID)
+				go func(jid string, j *jobs.Job) {
+					scheduleCh := time.After(timeUntillRunAfter)
+					<-scheduleCh
+					// s.announceJob(ctx, j.Queue, jid)
+				}(jobID, job)
+			}
+		}
+		s.mu.Unlock()
+
+		select {
+		case <-ticker.C:
+			continue
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *SqliteBackend) initFutureJobs(ctx context.Context, queue string) (err error) {
+	// rows, err := s.pool.Query(ctx, FutureJobQuery, queue)
+	// if err != nil {
+	// 	s.logger.Error("failed to fetch future jobs list", slog.String("queue", queue), slog.Any("error", err))
+	// 	return
+	// }
+
+	// futureJobs, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[jobs.Job])
+	// if err != nil {
+	// 	return
+	// }
+
+	// for _, job := range futureJobs {
+	// 	s.mu.Lock()
+	// 	s.futureJobs[fmt.Sprintf("%d", job.ID)] = job
+	// 	s.mu.Unlock()
+	// }
+
+	return
+}
+
+func (s *SqliteBackend) StartCron(ctx context.Context, cronSpec string, h handler.Handler) (err error) {
+	return nil
+}
+
+// SetLogger sets this backend's logger
+func (s *SqliteBackend) SetLogger(logger logging.Logger) {
+	s.logger = logger
+}
+
+// Shutdown shuts this backend down
+func (s *SqliteBackend) Shutdown(ctx context.Context) {
+	s.logger.Debug("starting shutdown")
+	// for queue := range s.handlers {
+
+	// }
+
+	for _, f := range s.cancelFuncs {
+		f()
+	}
+
+	s.cron.Stop()
+
+	s.cancelFuncs = nil
+	s.logger.Debug("shutdown complete")
+}
