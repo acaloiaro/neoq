@@ -7,7 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"log/slog"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/pranavmodx/neoq-sqlite/jobs"
 	"github.com/pranavmodx/neoq-sqlite/logging"
 	"github.com/robfig/cron"
+	"golang.org/x/exp/slog"
 )
 
 //go:embed migrations/*.sql
@@ -86,7 +88,7 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (sb neoq.Neoq, err 
 		opt(s.config)
 	}
 
-	// s.logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: s.config.LogLevel}))
+	s.logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: s.config.LogLevel}))
 	ctx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	s.cancelFuncs = append(s.cancelFuncs, cancel)
@@ -133,6 +135,15 @@ func (s *SqliteBackend) initializeDB() (err error) {
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		err = fmt.Errorf("unable to run migrations, could not apply up migration: %w", err)
 		s.logger.Error("unable to run migrations", slog.Any("error", err))
+		return
+	}
+
+	dbURI := strings.Split(s.config.ConnectionString, "/")
+	dbPath := strings.Join(dbURI[1:], "/")
+
+	s.db, err = sql.Open("sqlite3", dbPath)
+	if err != nil {
+		s.logger.Error("unable to set db connection")
 		return
 	}
 
