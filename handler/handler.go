@@ -149,6 +149,7 @@ func Exec(ctx context.Context, handler Handler) (err error) {
 	done := make(chan bool)
 
 	go func(ctx context.Context) {
+		log.Println("PS::handler.Exec called")
 		defer func() {
 			if x := recover(); x != nil {
 				err = errorFromPanic(x)

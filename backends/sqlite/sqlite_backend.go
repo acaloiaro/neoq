@@ -2,12 +2,17 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"embed"
 	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
 	"github.com/pranavmodx/neoq-sqlite"
 	"github.com/pranavmodx/neoq-sqlite/handler"
@@ -16,6 +21,9 @@ import (
 	"github.com/pranavmodx/neoq-sqlite/logging"
 	"github.com/robfig/cron"
 )
+
+//go:embed migrations/*.sql
+var sqliteMigrationsFS embed.FS
 
 const (
 	JobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
@@ -44,16 +52,104 @@ const (
 
 type SqliteBackend struct {
 	neoq.Neoq
-	cancelFuncs  []context.CancelFunc       // cancel functions to be called upon Shutdown()
-	config       *neoq.Config               // backend configuration
-	cron         *cron.Cron                 // scheduler for periodic jobs
-	futureJobs   map[string]*jobs.Job       // map of future job IDs to the corresponding job record
-	handlers     map[string]handler.Handler // a map of queue names to queue handlers
-	newQueues    chan string                // a channel that indicates that new queues are ready to be processed
-	readyQueues  chan string                // a channel that indicates which queues are ready to have jobs processed.
-	listenerChan chan string                // PS::listens for enqueued jobs to be processed
-	logger       logging.Logger             // backend-wide logger
-	mu           *sync.RWMutex              // protects concurrent access to fields on SqliteBackend
+	cancelFuncs       []context.CancelFunc       // cancel functions to be called upon Shutdown()
+	config            *neoq.Config               // backend configuration
+	cron              *cron.Cron                 // scheduler for periodic jobs
+	futureJobs        map[string]*jobs.Job       // map of future job IDs to the corresponding job record
+	handlers          map[string]handler.Handler // a map of queue names to queue handlers
+	newQueues         chan string                // a channel that indicates that new queues are ready to be processed
+	readyQueues       chan string                // a channel that indicates which queues are ready to have jobs processed.
+	queueListenerChan map[string]chan string     // PS::each queue has a listener channel to process enqueued jobs
+	logger            logging.Logger             // backend-wide logger
+	mu                *sync.RWMutex              // protects concurrent access to fields on SqliteBackend
+	db                *sql.DB                    // connection to sqlite for backend, used to process and enqueue jobs
+}
+
+func Backend(ctx context.Context, opts ...neoq.ConfigOption) (sb neoq.Neoq, err error) {
+	cfg := neoq.NewConfig()
+	cfg.IdleTransactionTimeout = neoq.DefaultIdleTxTimeout
+
+	s := &SqliteBackend{
+		cancelFuncs:       []context.CancelFunc{},
+		config:            cfg,
+		cron:              cron.New(),
+		futureJobs:        make(map[string]*jobs.Job),
+		handlers:          make(map[string]handler.Handler),
+		newQueues:         make(chan string),
+		readyQueues:       make(chan string),
+		queueListenerChan: make(map[string]chan string),
+		mu:                &sync.RWMutex{},
+	}
+
+	// Set all options
+	for _, opt := range opts {
+		opt(s.config)
+	}
+
+	// s.logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: s.config.LogLevel}))
+	ctx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.cancelFuncs = append(s.cancelFuncs, cancel)
+	s.mu.Unlock()
+
+	err = s.initializeDB()
+	if err != nil {
+		return nil, fmt.Errorf("unable to initialize jobs database: %w", err)
+	}
+
+	// monitor handlers for changes and LISTEN when new queues are added
+	go s.newQueueMonitor(ctx)
+
+	s.cron.Start()
+
+	sb = s
+
+	return sb, nil
+}
+
+func (s *SqliteBackend) initializeDB() (err error) {
+	log.Println("db path", s.config.ConnectionString)
+	log.Println("migration path", sqliteMigrationsFS)
+	file, _ := sqliteMigrationsFS.ReadFile("33_create_db_tables.up.sql")
+	log.Println(file)
+	migrations, err := iofs.New(sqliteMigrationsFS, "migrations")
+	if err != nil {
+		err = fmt.Errorf("unable to run migrations, error during iofs new: %w", err)
+		s.logger.Error("unable to run migrations", slog.Any("error", err))
+		return
+	}
+	log.Println("got migration files", migrations)
+
+	m, err := migrate.NewWithSourceInstance("iofs", migrations, s.config.ConnectionString)
+	if err != nil {
+		err = fmt.Errorf("unable to run migrations, could not create new source: %w", err)
+		s.logger.Error("unable to run migrations", slog.Any("error", err))
+		return
+	}
+
+	// We don't need the migration tooling to hold it's connections to the DB once it has been completed.
+	defer m.Close()
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		err = fmt.Errorf("unable to run migrations, could not apply up migration: %w", err)
+		s.logger.Error("unable to run migrations", slog.Any("error", err))
+		return
+	}
+
+	return nil
+}
+
+func (s *SqliteBackend) newQueueMonitor(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case newQueue := <-s.newQueues:
+			s.logger.Debug("configure new handler", "queue", newQueue)
+			s.logger.Debug("listening on queue", "queue", newQueue)
+			s.readyQueues <- newQueue
+		}
+	}
 }
 
 // Enqueue adds jobs to the specified queue
@@ -131,6 +227,7 @@ func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error
 	s.mu.Unlock()
 
 	s.newQueues <- h.Queue
+	s.queueListenerChan[h.Queue] = make(chan string) // PS
 
 	err = s.start(ctx, h)
 	if err != nil {
@@ -250,7 +347,7 @@ func (s *SqliteBackend) listen(ctx context.Context) (c chan string, errCh chan e
 				// our context has been canceled, the system is shutting down
 				return
 			default:
-				notification = <-s.listenerChan
+				// notification = <-s.listenerChan
 			}
 
 			s.logger.Debug(
@@ -427,6 +524,12 @@ func (s *SqliteBackend) initFutureJobs(ctx context.Context, queue string) (err e
 	// }
 
 	return
+}
+
+func WithConnectionString(connectionString string) neoq.ConfigOption {
+	return func(c *neoq.Config) {
+		c.ConnectionString = connectionString
+	}
 }
 
 func (s *SqliteBackend) StartCron(ctx context.Context, cronSpec string, h handler.Handler) (err error) {
