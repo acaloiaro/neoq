@@ -10,6 +10,7 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
 	github.com/jackc/pgx/v5 v5.5.4
 	github.com/jsuar/go-cron-descriptor v0.1.0
+	github.com/mattn/go-sqlite3 v1.14.16
 	github.com/pkg/errors v0.9.1
 	github.com/robfig/cron v1.2.0
 	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1

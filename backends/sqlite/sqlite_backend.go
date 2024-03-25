@@ -14,7 +14,6 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5"
 	"github.com/pranavmodx/neoq-sqlite"
 	"github.com/pranavmodx/neoq-sqlite/handler"
 	"github.com/pranavmodx/neoq-sqlite/internal"
@@ -141,7 +140,8 @@ func (s *SqliteBackend) initializeDB() (err error) {
 	dbURI := strings.Split(s.config.ConnectionString, "/")
 	dbPath := strings.Join(dbURI[1:], "/")
 
-	s.db, err = sql.Open("sqlite3", dbPath)
+	workDir, _ := os.Getwd()
+	s.db, err = sql.Open("sqlite3", workDir+dbPath)
 	if err != nil {
 		s.logger.Error("unable to set db connection")
 		return
@@ -165,12 +165,12 @@ func (s *SqliteBackend) newQueueMonitor(ctx context.Context) {
 
 // Enqueue adds jobs to the specified queue
 func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
-	// if job.Queue == "" {
-	// 	err = jobs.ErrNoQueueSpecified
-	// 	return
-	// }
+	if job.Queue == "" {
+		err = jobs.ErrNoQueueSpecified
+		return
+	}
 
-	// s.logger.Debug("enqueueing job payload", slog.String("queue", job.Queue), slog.Any("job_payload", job.Payload))
+	s.logger.Debug("enqueueing job payload", slog.String("queue", job.Queue), slog.Any("job_payload", job.Payload))
 
 	// s.logger.Debug("acquiring new connection from connection pool", slog.String("queue", job.Queue))
 	// conn, err := s.acquire(ctx)
@@ -180,36 +180,31 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 	// }
 	// defer conn.Release()
 
-	// s.logger.Debug("beginning new transaction to enqueue job", slog.String("queue", job.Queue))
-	// tx, err := conn.Begin(ctx)
-	// if err != nil {
-	// 	err = fmt.Errorf("error creating transaction: %w", err)
-	// 	return
-	// }
+	s.logger.Debug("beginning new transaction to enqueue job", slog.String("queue", job.Queue))
+	tx, err := s.db.Begin()
+	s.logger.Debug("PS::tx", tx)
+	if err != nil {
+		err = fmt.Errorf("error creating transaction: %w", err)
+		s.logger.Debug(err.Error())
+		return
+	}
 
 	// // Rollback is safe to call even if the tx is already closed, so if
 	// // the tx commits successfully, this is a no-op
-	// defer func(ctx context.Context) { _ = tx.Rollback(ctx) }(ctx) // rollback has no effect if the transaction has been committed
-	// jobID, err = s.enqueueJob(ctx, tx, job)
-	// if err != nil {
-	// 	var pgErr *pgconn.PgError
-	// 	if errors.As(err, &pgErr) {
-	// 		if pgErr.Code == pgerrcode.UniqueViolation {
-	// 			err = ErrDuplicateJob
-	// 			return
-	// 		}
-	// 	}
-	// 	s.logger.Error("error enqueueing job", slog.String("queue", job.Queue), slog.Any("error", err))
-	// 	err = fmt.Errorf("error enqueuing job: %w", err)
-	// 	return
-	// }
+	defer func(ctx context.Context) { _ = tx.Rollback() }(ctx) // rollback has no effect if the transaction has been committed
+	jobID, err = s.enqueueJob(ctx, tx, job)
+	if err != nil {
+		s.logger.Error("error enqueueing job", slog.String("queue", job.Queue), slog.Any("error", err))
+		err = fmt.Errorf("error enqueuing job: %w", err)
+		return
+	}
 
-	// err = tx.Commit(ctx)
-	// if err != nil {
-	// 	err = fmt.Errorf("error committing transaction: %w", err)
-	// 	return
-	// }
-	// s.logger.Debug("job added to queue:", slog.String("queue", job.Queue), slog.String("job_id", jobID))
+	err = tx.Commit()
+	if err != nil {
+		err = fmt.Errorf("error committing transaction: %w", err)
+		return
+	}
+	s.logger.Debug("job added to queue:", slog.String("queue", job.Queue), slog.String("job_id", jobID))
 
 	// // add future jobs to the future job list
 	// if job.RunAfter.After(time.Now().UTC()) {
@@ -224,7 +219,7 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 	// 	)
 	// }
 
-	return "-1", nil
+	return jobID, nil
 }
 
 // Start starts processing jobs with the specified queue and handler
@@ -263,7 +258,7 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 	// wait for the listener to be ready to listen
 	for q := range s.readyQueues {
 		if q == h.Queue {
-			listenJobChan, errCh = s.listen(ctx)
+			listenJobChan, errCh = s.listen(ctx, q)
 			break
 		}
 
@@ -294,10 +289,10 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 				}
 
 				if err != nil {
-					if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
-						err = nil
-						continue
-					}
+					// if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
+					// 	err = nil
+					// 	continue
+					// }
 
 					s.logger.Error(
 						"job failed",
@@ -322,9 +317,9 @@ func (s *SqliteBackend) pendingJobs(ctx context.Context, queue string) (jobsCh c
 		for {
 			jobID, err := s.getPendingJobID(ctx, queue)
 			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
-					break
-				}
+				// if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
+				// 	break
+				// }
 
 				s.logger.Error(
 					"failed to fetch pending job",
@@ -346,7 +341,7 @@ func (s *SqliteBackend) getPendingJobID(ctx context.Context, queue string) (jobI
 	return
 }
 
-func (s *SqliteBackend) listen(ctx context.Context) (c chan string, errCh chan error) {
+func (s *SqliteBackend) listen(ctx context.Context, queue string) (c chan string, errCh chan error) {
 	c = make(chan string)
 	errCh = make(chan error)
 
@@ -358,7 +353,7 @@ func (s *SqliteBackend) listen(ctx context.Context) (c chan string, errCh chan e
 				// our context has been canceled, the system is shutting down
 				return
 			default:
-				// notification = <-s.listenerChan
+				notification = <-s.queueListenerChan[queue]
 			}
 
 			s.logger.Debug(
@@ -383,6 +378,10 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 
 	job, err = s.getJob(ctx, jobID)
 	if err != nil {
+		return
+	}
+	if job == nil {
+		s.logger.Debug("PS::handled job! (dummy for now)")
 		return
 	}
 
@@ -567,4 +566,27 @@ func (s *SqliteBackend) Shutdown(ctx context.Context) {
 
 	s.cancelFuncs = nil
 	s.logger.Debug("shutdown complete")
+}
+
+func (s *SqliteBackend) enqueueJob(ctx context.Context, tx *sql.Tx, j *jobs.Job) (jobID string, err error) {
+	s.logger.Debug("PS::entered enqueueJob")
+
+	err = jobs.FingerprintJob(j)
+	if err != nil {
+		return
+	}
+
+	s.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
+	err = tx.QueryRow(`INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		j.Queue, j.Fingerprint, j.Payload["message"].(string), j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
+	// err = tx.QueryRow(`INSERT INTO neoq_jobs(id, queue, fingerprint, payload, run_after, deadline, max_retries)
+	// 	VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+	// 	1, j.Queue, j.Fingerprint, j.Payload["message"].(string), j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
+	if err != nil {
+		err = fmt.Errorf("unable add job to queue: %w", err)
+		return
+	}
+
+	return jobID, err
 }
