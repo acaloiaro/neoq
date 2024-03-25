@@ -22,7 +22,7 @@
   in {
     devShells = forEachSystem (system: let
       pkgs = nixpkgs.legacyPackages.${system};
-      postgresPort = 5433;
+      postgresPort = 5434;
       redisPort = 6380;
     in {
       default = devenv.lib.mkShell {
