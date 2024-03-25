@@ -924,6 +924,9 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 		return
 	}
 
+	ctx = withJobContext(ctx, job)
+	ctx = context.WithValue(ctx, txCtxVarKey, tx)
+
 	if job.RunAfter.After(time.Now()) {
 		p.logger.Error("Running a job too early.",
 			slog.String("queue", job.Queue),
@@ -939,9 +942,6 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 		err = p.updateJob(ctx, err)
 		return
 	}
-
-	ctx = withJobContext(ctx, job)
-	ctx = context.WithValue(ctx, txCtxVarKey, tx)
 
 	// check if the job is being retried and increment retry count accordingly
 	if job.Status != internal.JobStatusNew {
