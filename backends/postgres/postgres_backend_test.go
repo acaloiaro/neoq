@@ -999,3 +999,49 @@ func TestGetPQConnectionString(t *testing.T) {
 		})
 	}
 }
+
+// TestJobWithPastDeadline ensures that when a job is scheduled and its deadline is in the past, that the job is updated
+// with an error indicating that its deadline was not met
+// https://github.com/acaloiaro/neoq/issues/123
+func TestJobWithPastDeadline(t *testing.T) {
+	connString, _ := prepareAndCleanupDB(t)
+	const queue = "testing"
+	maxRetries := 5
+	done := make(chan bool)
+	defer close(done)
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// deadline in the past
+	deadline := time.Now().UTC().Add(time.Duration(-5) * time.Second)
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+		Deadline:   &deadline,
+		MaxRetries: &maxRetries,
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+	if e != nil && !errors.Is(e, jobs.ErrJobExceededDeadline) {
+		t.Error(err)
+	}
+}
