@@ -848,15 +848,15 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 		return
 	}
 
+	ctx = withJobContext(ctx, job)
+	ctx = context.WithValue(ctx, txCtxVarKey, tx)
+
 	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
 		err = jobs.ErrJobExceededDeadline
 		p.logger.Debug("job deadline is in the past, skipping", slog.String("queue", job.Queue), slog.Int64("job_id", job.ID))
 		err = p.updateJob(ctx, err)
 		return
 	}
-
-	ctx = withJobContext(ctx, job)
-	ctx = context.WithValue(ctx, txCtxVarKey, tx)
 
 	// check if the job is being retried and increment retry count accordingly
 	if job.Status != internal.JobStatusNew {
