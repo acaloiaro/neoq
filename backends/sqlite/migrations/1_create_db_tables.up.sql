@@ -2,7 +2,7 @@ CREATE TABLE neoq_jobs (
 	id integer PRIMARY KEY NOT NULL,
     fingerprint text,
     queue text,
-    job_status text,
+    status text default "new",
     payload text,
     retries integer default 0,
     max_retries integer default 5,

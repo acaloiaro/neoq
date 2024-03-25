@@ -38,6 +38,7 @@ type Job struct {
 	Status      string         `db:"status"`      // The status of the job
 	Queue       string         `db:"queue"`       // The queue the job is on
 	Payload     map[string]any `db:"payload"`     // JSON job payload for more complex jobs
+	Payload2    string         `db:"payload"`     // JSON job payload for more complex jobs
 	Deadline    *time.Time     `db:"deadline"`    // The time after which the job should no longer be run
 	RunAfter    time.Time      `db:"run_after"`   // The time after which the job is elligible to be picked up by a worker
 	RanAt       null.Time      `db:"ran_at"`      // The last time the job ran
