@@ -26,6 +26,8 @@ import (
 //go:embed migrations/*.sql
 var sqliteMigrationsFS embed.FS
 
+type contextKey struct{}
+
 const (
 	JobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
@@ -35,19 +37,22 @@ const (
 	PendingJobIDQuery = `SELECT id
 					FROM neoq_jobs
 					WHERE queue = $1
-					AND status NOT IN ('processed')
-					AND run_after <= NOW()
-					FOR UPDATE SKIP LOCKED
+					AND status != "processed"
+					AND run_after <= datetime("now")
 					LIMIT 1`
 	FutureJobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE queue = $1
-					AND status NOT IN ('processed')
-					AND run_after > NOW()
+					AND status != "processed"
+					AND run_after > datetime("now")
 					ORDER BY run_after ASC
-					LIMIT 100
-					FOR UPDATE SKIP LOCKED`
+					LIMIT 100`
 	shutdownJobID = "-1" // job ID announced when triggering a shutdown
+)
+
+var (
+	txCtxVarKey               contextKey
+	ErrNoTransactionInContext = errors.New("context does not have a Tx set")
 )
 
 type SqliteBackend struct {
@@ -181,7 +186,7 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 
 	s.logger.Debug("beginning new transaction to enqueue job", slog.String("queue", job.Queue))
 	tx, err := s.db.Begin()
-	s.logger.Debug("PS::tx", tx)
+	// s.logger.Debug("PS::tx", tx)
 	if err != nil {
 		err = fmt.Errorf("error creating transaction: %w", err)
 		s.logger.Debug(err.Error())
@@ -323,32 +328,32 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 func (s *SqliteBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan string) {
 	jobsCh = make(chan string)
 
-	// go func(ctx context.Context) {
-	// 	for {
-	// 		jobID, err := s.getPendingJobID(ctx, queue)
-	// 		log.Println("PS::pending job id", jobID)
-	// 		if err != nil {
-	// 			// if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
-	// 			// 	break
-	// 			// }
+	go func(ctx context.Context) {
+		for {
+			jobID, err := s.getPendingJobID(ctx, queue)
+			log.Println("PS::pending job id", jobID)
+			if err != nil {
+				// if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
+				// 	break
+				// }
 
-	// 			s.logger.Error(
-	// 				"failed to fetch pending job",
-	// 				slog.String("queue", queue),
-	// 				slog.Any("error", err),
-	// 				slog.String("job_id", jobID),
-	// 			)
-	// 		} else {
-	// 			jobsCh <- jobID
-	// 		}
-	// 	}
-	// }(ctx)
+				s.logger.Error(
+					"failed to fetch pending job",
+					slog.String("queue", queue),
+					slog.Any("error", err),
+					slog.String("job_id", jobID),
+				)
+			} else {
+				jobsCh <- jobID
+			}
+		}
+	}(ctx)
 
 	return jobsCh
 }
 
 func (s *SqliteBackend) getPendingJobID(ctx context.Context, queue string) (jobID string, err error) {
-	// err = conn.QueryRow(ctx, PendingJobIDQuery, queue).Scan(&jobID)
+	err = s.db.QueryRow(PendingJobIDQuery, queue).Scan(&jobID)
 	return
 }
 
@@ -356,40 +361,44 @@ func (s *SqliteBackend) listen(ctx context.Context, queue string) (c chan string
 	c = make(chan string)
 	errCh = make(chan error)
 
-	go func(ctx context.Context) {
-		// var notification string
-		for {
-			select {
-			case <-ctx.Done():
-				// our context has been canceled, the system is shutting down
-				return
-			default:
-				// notification = <-s.queueListenerChan[queue]
-			}
+	// go func(ctx context.Context) {
+	// 	// var notification string
+	// 	for {
+	// 		select {
+	// 		case <-ctx.Done():
+	// 			// our context has been canceled, the system is shutting down
+	// 			return
+	// 		default:
+	// 			// notification = <-s.queueListenerChan[queue]
+	// 		}
 
-			// s.logger.Debug(
-			// 	"job notification for queue",
-			// 	slog.Any("notification", notification),
-			// )
+	// 		// s.logger.Debug(
+	// 		// 	"job notification for queue",
+	// 		// 	slog.Any("notification", notification),
+	// 		// )
 
-			// // check if Shutdown() has been called
-			// if notification.Payload2 == shutdownJobID {
-			// 	return
-			// }
+	// 		// // check if Shutdown() has been called
+	// 		// if notification.Payload2 == shutdownJobID {
+	// 		// 	return
+	// 		// }
 
-			// c <- notification
-		}
-	}(ctx)
+	// 		// c <- notification
+	// 	}
+	// }(ctx)
 
 	return c, errCh
 }
 
 func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error) {
+	log.Println("PS::handleJob start")
+	log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
+
 	var job *jobs.Job
 	var tx *sql.Tx
 
 	tx, err = s.db.Begin()
 	if err != nil {
+		log.Println("PS::acquiring tx in handleJob failed, returning")
 		return
 	}
 	defer func() { _ = tx.Rollback() }() // rollback has no effect if the transaction has been committed
@@ -398,51 +407,55 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 	if err != nil {
 		return
 	}
-	log.Println("PS::get job", jobID, job)
-	// if job == nil {
-	// 	s.logger.Debug("PS::handled job! (dummy for now)")
-	// 	return
-	// }
+	log.Println("PS::get job done", jobID, job)
 
-	// if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
-	// 	err = jobs.ErrJobExceededDeadline
-	// 	s.logger.Debug("job deadline is in the past, skipping", slog.String("queue", job.Queue), slog.Int64("job_id", job.ID))
-	// 	err = s.updateJob(ctx, err)
-	// 	return
-	// }
+	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
+		err = jobs.ErrJobExceededDeadline
+		s.logger.Debug("job deadline is in the past, skipping", slog.String("queue", job.Queue), slog.Int64("job_id", job.ID))
+		err = s.updateJob(ctx, err)
+		return
+	}
 
-	// // check if the job is being retried and increment retry count accordingly
-	// if job.Status != internal.JobStatusNew {
-	// 	job.Retries++
-	// }
+	// PS::understand ctx in detail later
+	ctx = withJobContext(ctx, job)
+	ctx = context.WithValue(ctx, txCtxVarKey, tx)
+	log.Println("PS::set ctx with job", ctx, ctx.Value(internal.JobCtxVarKey))
 
-	// var jobErr error
-	// h, ok := s.handlers[job.Queue]
-	// if !ok {
-	// 	s.logger.Error("received a job for which no handler is configured",
-	// 		slog.String("queue", job.Queue),
-	// 		slog.Int64("job_id", job.ID))
-	// 	return handler.ErrNoHandlerForQueue
-	// }
+	// check if the job is being retried and increment retry count accordingly
+	if job.Status != internal.JobStatusNew {
+		job.Retries++
+	}
 
-	// // execute the queue handler of this job
-	// jobErr = handler.Exec(ctx, h)
-	// err = s.updateJob(ctx, jobErr)
-	// if err != nil {
-	// 	if errors.Is(err, context.Canceled) {
-	// 		return
-	// 	}
+	var jobErr error
+	h, ok := s.handlers[job.Queue]
+	if !ok {
+		s.logger.Error("received a job for which no handler is configured",
+			slog.String("queue", job.Queue),
+			slog.Int64("job_id", job.ID))
+		return handler.ErrNoHandlerForQueue
+	}
 
-	// 	err = fmt.Errorf("error updating job status: %w", err)
-	// 	return err
-	// }
+	// execute the queue handler of this job
+	jobErr = handler.Exec(ctx, h)
+	err = s.updateJob(ctx, jobErr)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+
+		err = fmt.Errorf("error updating job status: %w", err)
+		return err
+	}
+
+	log.Println("PS::handleJob end")
+	log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
 
 	return nil
 }
 
 func (s *SqliteBackend) getJob(ctx context.Context, tx *sql.Tx, jobID string) (job *jobs.Job, err error) {
 	job = &jobs.Job{}
-	log.Println("PS::query job id", jobID)
+	// log.Println("PS::query job id", jobID)
 	row := tx.QueryRow(JobQuery, 1)
 	err = row.Scan(
 		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
@@ -450,11 +463,15 @@ func (s *SqliteBackend) getJob(ctx context.Context, tx *sql.Tx, jobID string) (j
 		&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
 	)
 	// id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
-	log.Println("PS::got job", job.ID)
 	if err != nil {
 		return
 	}
 	return
+}
+
+// withJobContext creates a new context with the Job set
+func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
+	return context.WithValue(ctx, internal.JobCtxVarKey, j)
 }
 
 func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error) (err error) {
@@ -472,6 +489,11 @@ func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error) (err error)
 		return fmt.Errorf("error getting job from context: %w", err)
 	}
 
+	var tx *sql.Tx
+	if tx, err = txFromContext(ctx); err != nil {
+		return
+	}
+
 	if job.MaxRetries != nil && job.Retries >= *job.MaxRetries {
 		err = s.moveToDeadQueue(ctx, job, errMsg)
 		return
@@ -480,11 +502,11 @@ func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error) (err error)
 	var runAfter time.Time
 	if status == internal.JobStatusFailed {
 		runAfter = internal.CalculateBackoff(job.Retries)
-		// qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3, retries = $4, run_after = $5 WHERE id = $6"
-		// _, err = tx.Exec(ctx, qstr, time.Now().UTC(), errMsg, status, job.Retries, runAfter, job.ID)
+		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3, retries = $4, run_after = $5 WHERE id = $6"
+		_, err = tx.Exec(qstr, time.Now().UTC(), errMsg, status, job.Retries, runAfter, job.ID)
 	} else {
-		// qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3 WHERE id = $4"
-		// _, err = tx.Exec(ctx, qstr, time.Now().UTC(), errMsg, status, job.ID)
+		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3 WHERE id = $4"
+		_, err = tx.Exec(qstr, time.Now().UTC(), errMsg, status, job.ID)
 	}
 
 	if err != nil {
@@ -498,6 +520,18 @@ func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error) (err error)
 	}
 
 	return nil
+}
+
+// txFromContext gets the transaction from a context, if the transaction is already set
+func txFromContext(ctx context.Context) (t *sql.Tx, err error) {
+	var ok bool
+	if t, ok = ctx.Value(txCtxVarKey).(*sql.Tx); ok {
+		return
+	}
+
+	err = ErrNoTransactionInContext
+
+	return
 }
 
 func (s *SqliteBackend) moveToDeadQueue(ctx context.Context, j *jobs.Job, jobErr string) (err error) {
