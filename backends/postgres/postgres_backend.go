@@ -70,9 +70,11 @@ var (
 	shutdownJobID                    = "-1" // job ID announced when triggering a shutdown
 	shutdownAnnouncementAllowance    = 100  // ms
 	ErrCnxString                     = errors.New("invalid connecton string: see documentation for valid connection strings")
+	ErrConnectionStringEmpty         = errors.New("connection string cannot be empty")
 	ErrDuplicateJob                  = errors.New("duplicate job")
 	ErrNoTransactionInContext        = errors.New("context does not have a Tx set")
 	ErrExceededConnectionPoolTimeout = errors.New("exceeded timeout acquiring a connection from the pool")
+	ErrUnsupportedURIScheme          = errors.New("only postgres:// and postgresql:// scheme URIs are supported, invalid connection string")
 )
 
 // PgBackend is a Postgres-based Neoq backend
@@ -855,6 +857,17 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 		err = jobs.ErrJobExceededDeadline
 		p.logger.Debug("job deadline is in the past, skipping", slog.String("queue", job.Queue), slog.Int64("job_id", job.ID))
 		err = p.updateJob(ctx, err)
+		if err != nil {
+			p.logger.Error("unable to update job status", "error", err, "job_id", job.ID)
+			return
+		}
+
+		err = tx.Commit(ctx)
+		if err != nil {
+			p.logger.Error("unable to update job status", "error", err, "job_id", job.ID)
+			return
+		}
+
 		return
 	}
 
@@ -1027,7 +1040,7 @@ func GetPQConnectionString(connectionString string) (string, error) {
 	}
 
 	if dbURI.String() == "" {
-		return "", fmt.Errorf("connection string cannot be empty")
+		return "", ErrConnectionStringEmpty
 	}
 
 	scheme := dbURI.Scheme
@@ -1038,7 +1051,7 @@ func GetPQConnectionString(connectionString string) (string, error) {
 
 	if scheme != "postgres" && scheme != "postgresql" {
 		// This isn't a postgresql URI-style string (postgres://hostname/db)
-		return "", fmt.Errorf("only postgres and postgresql scheme URIs are supported, invalid connection string: %s", connectionString)
+		return "", ErrUnsupportedURIScheme
 	}
 
 	sslMode := "verify-ca"

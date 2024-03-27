@@ -906,7 +906,7 @@ func TestGetPQConnectionString(t *testing.T) {
 		{
 			name:    "multiple hostnames",
 			input:   "postgres://username:password@hostname1,hostname2,hostname3:5432/database",
-			want:    "postgres://username:password@hostname1,hostname2,hostname3:5432/database?sslmode=require&x-migrations-table=neoq_schema_migrations",
+			want:    "postgres://username:password@hostname1,hostname2,hostname3:5432/database?sslmode=require&x-migrations-table=neoq_schema_migrations", // nolint: lll
 			wantErr: false,
 		},
 
@@ -1004,8 +1004,9 @@ func TestGetPQConnectionString(t *testing.T) {
 // with an error indicating that its deadline was not met
 // https://github.com/acaloiaro/neoq/issues/123
 func TestJobWithPastDeadline(t *testing.T) {
-	connString, _ := prepareAndCleanupDB(t)
+	connString, conn := prepareAndCleanupDB(t)
 	const queue = "testing"
+	timeoutTimer := time.After(5 * time.Second)
 	maxRetries := 5
 	done := make(chan bool)
 	defer close(done)
@@ -1018,7 +1019,6 @@ func TestJobWithPastDeadline(t *testing.T) {
 	defer nq.Shutdown(ctx)
 
 	h := handler.New(queue, func(_ context.Context) (err error) {
-		done <- true
 		return
 	})
 
@@ -1038,10 +1038,39 @@ func TestJobWithPastDeadline(t *testing.T) {
 		MaxRetries: &maxRetries,
 	})
 	if e != nil || jid == jobs.DuplicateJobID {
-		t.Error(e)
+		t.Error(e) // nolint: goerr113
 	}
 
 	if e != nil && !errors.Is(e, jobs.ErrJobExceededDeadline) {
-		t.Error(err)
+		t.Error(err) // nolint: goerr113
+	}
+
+	var status string
+	go func() {
+		// ensure job has failed/has the correct status
+		for {
+			err = conn.
+				QueryRow(context.Background(), "SELECT status FROM neoq_jobs WHERE id = $1", jid).
+				Scan(&status)
+			if err != nil {
+				break
+			}
+
+			if status == internal.JobStatusFailed {
+				done <- true
+				break
+			}
+
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+	if err != nil {
+		t.Errorf("job should have resulted in a status of 'failed', but its status is %s", status)
 	}
 }
