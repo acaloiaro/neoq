@@ -220,9 +220,9 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 
 	// PS::send to channel
 	// go func() {
-	log.Println("PS::assigning job id to queue listener")
+	// log.Println("PS::assigning job id to queue listener")
 	s.queueListenerChan[job.Queue] <- jobID
-	log.Println("PS::done assigning job id to queue listener")
+	// log.Println("PS::done assigning job id to queue listener")
 	// }()
 
 	// // add future jobs to the future job list
@@ -252,8 +252,8 @@ func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error
 	s.mu.Unlock()
 
 	s.newQueues <- h.Queue
-	s.queueListenerChan = make(map[string]chan string)
-	s.queueListenerChan[h.Queue] = make(chan string, 1000) // PS
+	s.queueListenerChan = make(map[string]chan string, 1000)
+	s.queueListenerChan[h.Queue] = make(chan string) // PS
 
 	err = s.start(ctx, h)
 	if err != nil {
@@ -265,8 +265,8 @@ func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error
 
 // start starts processing new, pending, and future jobs
 func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error) {
-	s.logger.Debug("PS::at start()")
-	log.Println("PS::concurrency", h.Concurrency)
+	// s.logger.Debug("PS::at start()")
+	log.Println("PS::concurrency set to", h.Concurrency)
 	var ok bool
 	// var listenJobChan chan string
 	var errCh chan error
@@ -303,7 +303,7 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 				select {
 				// case n = <-listenJobChan:
 				case n = <-s.queueListenerChan[h.Queue]:
-					s.logger.Debug("PS::received from listen channel")
+					s.logger.Debug("PS::received from listener channel")
 					err = s.handleJob(ctx, n)
 				case n = <-pendingJobsChan:
 					s.logger.Debug("PS::received from pending channel")
@@ -321,7 +321,7 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 					// 	continue
 					// }
 
-					log.Println("PS::err here!!!")
+					// log.Println("PS::err here!!!")
 
 					s.logger.Error(
 						"job failed",
@@ -371,11 +371,12 @@ func (s *SqliteBackend) allPendingJobs(ctx context.Context, queue string) (jobsC
 
 	go func(ctx context.Context) {
 		jobIDs, err := s.getAllPendingJobIDs(ctx, queue)
+		log.Println("PS::all pending job ids", jobIDs)
 		if err != nil {
 			log.Println("PS::err getting pending jobs", err)
 		}
 		for _, jobID := range jobIDs {
-			log.Println("PS::pending job id", jobID)
+			// log.Println("PS::pending job id", jobID)
 			jobsCh <- jobID
 		}
 	}(ctx)
@@ -444,7 +445,7 @@ func (s *SqliteBackend) listen(ctx context.Context, queue string) (c chan string
 
 func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error) {
 	log.Println("PS::handleJob start")
-	log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
+	// log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
 
 	// try := s.mu.TryLock()
 	// if !try {
@@ -457,7 +458,7 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		log.Println("PS::could not retrieve row with jobid", jobID)
 		return
 	}
-	log.Println("PS::get job done", jobID, job)
+	// log.Println("PS::get job done", jobID, job)
 
 	// if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
 	// 	err = jobs.ErrJobExceededDeadline
@@ -500,7 +501,7 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 	defer func() { _ = tx.Rollback() }() // rollback has no effect if the transaction has been committed
 
 	ctx = context.WithValue(ctx, txCtxVarKey, tx)
-	log.Println("PS::set ctx with job", ctx, ctx.Value(internal.JobCtxVarKey))
+	// log.Println("PS::set ctx with job", ctx, ctx.Value(internal.JobCtxVarKey))
 
 	err = s.updateJob(ctx, jobErr)
 	if err != nil {
@@ -520,7 +521,7 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 	}
 
 	log.Println("PS::handleJob end")
-	log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
+	// log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
 
 	return nil
 }
@@ -727,7 +728,7 @@ func (s *SqliteBackend) Shutdown(ctx context.Context) {
 }
 
 func (s *SqliteBackend) enqueueJob(ctx context.Context, tx *sql.Tx, j *jobs.Job) (jobID string, err error) {
-	s.logger.Debug("PS::entered enqueueJob")
+	// s.logger.Debug("PS::entered enqueueJob")
 
 	err = jobs.FingerprintJob(j)
 	if err != nil {
