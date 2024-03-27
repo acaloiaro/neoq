@@ -32,8 +32,7 @@ const (
 	JobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE id = $1
-					AND status != "processed"
-					LIMIT 1`
+					AND status != "processed"`
 	PendingJobIDQuery = `SELECT id
 					FROM neoq_jobs
 					WHERE queue = $1
@@ -333,9 +332,9 @@ func (s *SqliteBackend) pendingJobs(ctx context.Context, queue string) (jobsCh c
 			jobID, err := s.getPendingJobID(ctx, queue)
 			log.Println("PS::pending job id", jobID)
 			if err != nil {
-				// if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
-				// 	break
-				// }
+				if errors.Is(err, sql.ErrNoRows) || errors.Is(err, context.Canceled) {
+					break
+				}
 
 				s.logger.Error(
 					"failed to fetch pending job",
@@ -353,7 +352,10 @@ func (s *SqliteBackend) pendingJobs(ctx context.Context, queue string) (jobsCh c
 }
 
 func (s *SqliteBackend) getPendingJobID(ctx context.Context, queue string) (jobID string, err error) {
-	err = s.db.QueryRow(PendingJobIDQuery, queue).Scan(&jobID)
+	// s.mu.Lock()
+	// defer s.mu.Unlock()
+	// conn, _ := s.db.Conn(ctx)
+	err = s.db.QueryRowContext(ctx, PendingJobIDQuery, queue).Scan(&jobID)
 	return
 }
 
@@ -396,6 +398,9 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 	var job *jobs.Job
 	var tx *sql.Tx
 
+	// s.mu.Lock()
+	// defer s.mu.Unlock()
+
 	tx, err = s.db.Begin()
 	if err != nil {
 		log.Println("PS::acquiring tx in handleJob failed, returning")
@@ -405,6 +410,7 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 
 	job, err = s.getJob(ctx, tx, jobID)
 	if err != nil {
+		log.Println("PS::could not retrieve row with jobid", jobID)
 		return
 	}
 	log.Println("PS::get job done", jobID, job)
@@ -447,6 +453,13 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		return err
 	}
 
+	err = tx.Commit()
+	if err != nil {
+		errMsg := "unable to commit job transaction. retrying this job may dupliate work:"
+		s.logger.Error(errMsg, slog.String("queue", h.Queue), slog.Any("error", err), slog.Int64("job_id", job.ID))
+		return fmt.Errorf("%s %w", errMsg, err)
+	}
+
 	log.Println("PS::handleJob end")
 	log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
 
@@ -454,9 +467,11 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 }
 
 func (s *SqliteBackend) getJob(ctx context.Context, tx *sql.Tx, jobID string) (job *jobs.Job, err error) {
+	// s.mu.Lock()
+	// defer s.mu.Unlock()
 	job = &jobs.Job{}
 	// log.Println("PS::query job id", jobID)
-	row := tx.QueryRow(JobQuery, 1)
+	row := tx.QueryRowContext(ctx, JobQuery, jobID)
 	err = row.Scan(
 		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
 		&job.Deadline, &job.Payload2, &job.Retries, &job.MaxRetries,
