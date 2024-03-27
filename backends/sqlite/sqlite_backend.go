@@ -39,6 +39,11 @@ const (
 					AND status != "processed"
 					AND run_after <= datetime("now")
 					LIMIT 1`
+	AllPendingJobIDQuery = `SELECT id
+					FROM neoq_jobs
+					WHERE queue = $1
+					AND status != "processed"
+					AND run_after <= datetime("now")`
 	FutureJobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE queue = $1
@@ -56,17 +61,17 @@ var (
 
 type SqliteBackend struct {
 	neoq.Neoq
-	cancelFuncs []context.CancelFunc       // cancel functions to be called upon Shutdown()
-	config      *neoq.Config               // backend configuration
-	cron        *cron.Cron                 // scheduler for periodic jobs
-	futureJobs  map[string]*jobs.Job       // map of future job IDs to the corresponding job record
-	handlers    map[string]handler.Handler // a map of queue names to queue handlers
-	newQueues   chan string                // a channel that indicates that new queues are ready to be processed
-	readyQueues chan string                // a channel that indicates which queues are ready to have jobs processed.
-	// queueListenerChan map[string]chan string     // PS::each queue has a listener channel to process enqueued jobs
-	logger logging.Logger // backend-wide logger
-	mu     *sync.RWMutex  // protects concurrent access to fields on SqliteBackend
-	db     *sql.DB        // connection to sqlite for backend, used to process and enqueue jobs
+	cancelFuncs       []context.CancelFunc       // cancel functions to be called upon Shutdown()
+	config            *neoq.Config               // backend configuration
+	cron              *cron.Cron                 // scheduler for periodic jobs
+	futureJobs        map[string]*jobs.Job       // map of future job IDs to the corresponding job record
+	handlers          map[string]handler.Handler // a map of queue names to queue handlers
+	newQueues         chan string                // a channel that indicates that new queues are ready to be processed
+	readyQueues       chan string                // a channel that indicates which queues are ready to have jobs processed.
+	queueListenerChan map[string]chan string     // PS::each queue has a listener channel to process enqueued jobs
+	logger            logging.Logger             // backend-wide logger
+	mu                *sync.RWMutex              // protects concurrent access to fields on SqliteBackend
+	db                *sql.DB                    // connection to sqlite for backend, used to process and enqueue jobs
 }
 
 func Backend(ctx context.Context, opts ...neoq.ConfigOption) (sb neoq.Neoq, err error) {
@@ -192,6 +197,10 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 		return
 	}
 
+	// PS::lock here
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// // Rollback is safe to call even if the tx is already closed, so if
 	// // the tx commits successfully, this is a no-op
 	defer func(ctx context.Context) { _ = tx.Rollback() }(ctx) // rollback has no effect if the transaction has been committed
@@ -211,7 +220,9 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 
 	// PS::send to channel
 	// go func() {
-	// s.queueListenerChan[job.Queue] <- jobID
+	log.Println("PS::assigning job id to queue listener")
+	s.queueListenerChan[job.Queue] <- jobID
+	log.Println("PS::done assigning job id to queue listener")
 	// }()
 
 	// // add future jobs to the future job list
@@ -241,7 +252,8 @@ func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error
 	s.mu.Unlock()
 
 	s.newQueues <- h.Queue
-	// s.queueListenerChan[h.Queue] = make(chan string) // PS
+	s.queueListenerChan = make(map[string]chan string)
+	s.queueListenerChan[h.Queue] = make(chan string, 1000) // PS
 
 	err = s.start(ctx, h)
 	if err != nil {
@@ -256,19 +268,21 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 	s.logger.Debug("PS::at start()")
 	log.Println("PS::concurrency", h.Concurrency)
 	var ok bool
-	var listenJobChan chan string
+	// var listenJobChan chan string
 	var errCh chan error
 
 	if h, ok = s.handlers[h.Queue]; !ok {
 		return fmt.Errorf("%w: %s", handler.ErrNoHandlerForQueue, h.Queue)
 	}
 
-	pendingJobsChan := s.pendingJobs(ctx, h.Queue) // process overdue jobs *at startup*
+	// pendingJobsChan := s.pendingJobs(ctx, h.Queue) // process overdue jobs *at startup*
+	pendingJobsChan := s.allPendingJobs(ctx, h.Queue) // process overdue jobs *at startup*
 
 	// wait for the listener to be ready to listen
 	for q := range s.readyQueues {
 		if q == h.Queue {
-			listenJobChan, errCh = s.listen(ctx, q) // PS::instead of pg notify listener, we should probably poll for jobs
+			// listenJobChan, errCh = s.listen(ctx, q) // PS::instead of pg notify listener, we should probably poll for jobs
+
 			break
 		}
 
@@ -287,7 +301,8 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 
 			for {
 				select {
-				case n = <-listenJobChan:
+				// case n = <-listenJobChan:
+				case n = <-s.queueListenerChan[h.Queue]:
 					s.logger.Debug("PS::received from listen channel")
 					err = s.handleJob(ctx, n)
 				case n = <-pendingJobsChan:
@@ -351,12 +366,48 @@ func (s *SqliteBackend) pendingJobs(ctx context.Context, queue string) (jobsCh c
 	return jobsCh
 }
 
+func (s *SqliteBackend) allPendingJobs(ctx context.Context, queue string) (jobsCh chan string) {
+	jobsCh = make(chan string)
+
+	go func(ctx context.Context) {
+		jobIDs, err := s.getAllPendingJobIDs(ctx, queue)
+		if err != nil {
+			log.Println("PS::err getting pending jobs", err)
+		}
+		for _, jobID := range jobIDs {
+			log.Println("PS::pending job id", jobID)
+			jobsCh <- jobID
+		}
+	}(ctx)
+
+	return jobsCh
+}
+
 func (s *SqliteBackend) getPendingJobID(ctx context.Context, queue string) (jobID string, err error) {
 	// s.mu.Lock()
 	// defer s.mu.Unlock()
 	// conn, _ := s.db.Conn(ctx)
 	err = s.db.QueryRowContext(ctx, PendingJobIDQuery, queue).Scan(&jobID)
 	return
+}
+
+func (s *SqliteBackend) getAllPendingJobIDs(ctx context.Context, queue string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, AllPendingJobIDQuery, queue)
+	if err != nil {
+		return []string{}, err
+	}
+	jobIDs := []string{}
+	for rows.Next() {
+		var jobID string
+		err := rows.Scan(&jobID)
+		if err != nil {
+			log.Println("PS::some err with getting pending job row", err)
+			return jobIDs, nil
+		}
+		jobIDs = append(jobIDs, jobID)
+	}
+
+	return jobIDs, nil
 }
 
 func (s *SqliteBackend) listen(ctx context.Context, queue string) (c chan string, errCh chan error) {
@@ -395,37 +446,25 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 	log.Println("PS::handleJob start")
 	log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
 
-	var job *jobs.Job
-	var tx *sql.Tx
-
-	// s.mu.Lock()
+	// try := s.mu.TryLock()
+	// if !try {
+	// 	return
+	// }
 	// defer s.mu.Unlock()
 
-	tx, err = s.db.Begin()
-	if err != nil {
-		log.Println("PS::acquiring tx in handleJob failed, returning")
-		return
-	}
-	defer func() { _ = tx.Rollback() }() // rollback has no effect if the transaction has been committed
-
-	job, err = s.getJob(ctx, tx, jobID)
+	job, err := s.getJobWithoutTx(ctx, jobID)
 	if err != nil {
 		log.Println("PS::could not retrieve row with jobid", jobID)
 		return
 	}
 	log.Println("PS::get job done", jobID, job)
 
-	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
-		err = jobs.ErrJobExceededDeadline
-		s.logger.Debug("job deadline is in the past, skipping", slog.String("queue", job.Queue), slog.Int64("job_id", job.ID))
-		err = s.updateJob(ctx, err)
-		return
-	}
-
-	// PS::understand ctx in detail later
-	ctx = withJobContext(ctx, job)
-	ctx = context.WithValue(ctx, txCtxVarKey, tx)
-	log.Println("PS::set ctx with job", ctx, ctx.Value(internal.JobCtxVarKey))
+	// if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
+	// 	err = jobs.ErrJobExceededDeadline
+	// 	s.logger.Debug("job deadline is in the past, skipping", slog.String("queue", job.Queue), slog.Int64("job_id", job.ID))
+	// 	err = s.updateJob(ctx, err)
+	// 	return
+	// }
 
 	// check if the job is being retried and increment retry count accordingly
 	if job.Status != internal.JobStatusNew {
@@ -441,8 +480,28 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		return handler.ErrNoHandlerForQueue
 	}
 
+	// PS::understand ctx in detail later
+	ctx = withJobContext(ctx, job)
+
 	// execute the queue handler of this job
 	jobErr = handler.Exec(ctx, h)
+
+	var tx *sql.Tx
+
+	// PS::lock here
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err = s.db.Begin()
+	if err != nil {
+		log.Println("PS::acquiring tx in handleJob failed, returning")
+		return
+	}
+	defer func() { _ = tx.Rollback() }() // rollback has no effect if the transaction has been committed
+
+	ctx = context.WithValue(ctx, txCtxVarKey, tx)
+	log.Println("PS::set ctx with job", ctx, ctx.Value(internal.JobCtxVarKey))
+
 	err = s.updateJob(ctx, jobErr)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -472,6 +531,24 @@ func (s *SqliteBackend) getJob(ctx context.Context, tx *sql.Tx, jobID string) (j
 	job = &jobs.Job{}
 	// log.Println("PS::query job id", jobID)
 	row := tx.QueryRowContext(ctx, JobQuery, jobID)
+	err = row.Scan(
+		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
+		&job.Deadline, &job.Payload2, &job.Retries, &job.MaxRetries,
+		&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
+	)
+	// id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
+	if err != nil {
+		return
+	}
+	return
+}
+
+func (s *SqliteBackend) getJobWithoutTx(ctx context.Context, jobID string) (job *jobs.Job, err error) {
+	// s.mu.Lock()
+	// defer s.mu.Unlock()
+	job = &jobs.Job{}
+	// log.Println("PS::query job id", jobID)
+	row := s.db.QueryRowContext(ctx, JobQuery, jobID)
 	err = row.Scan(
 		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
 		&job.Deadline, &job.Payload2, &job.Retries, &job.MaxRetries,

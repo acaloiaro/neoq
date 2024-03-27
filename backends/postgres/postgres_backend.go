@@ -869,15 +869,17 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 // 2. handleJob secondly calls the handler on the job, and finally updates the job's status
 // nolint: cyclop
 func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
-	log.Println("PS::handleJob called")
+	log.Println("PS::handleJob called for job id", jobID)
 	var job *jobs.Job
 	var tx pgx.Tx
 	conn, err := p.acquire(ctx)
 	if err != nil {
+		log.Println("PS::could not acquire conn so exiting for jobid", jobID)
 		return
 	}
 	defer conn.Release()
 
+	log.Println("PS::handleJob conn.begin", jobID)
 	tx, err = conn.Begin(ctx)
 	if err != nil {
 		return
@@ -886,6 +888,7 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 
 	job, err = p.getJob(ctx, tx, jobID)
 	if err != nil {
+		log.Println("PS::could not get job", jobID, err)
 		return
 	}
 	log.Println("PS::get job", jobID, job)
