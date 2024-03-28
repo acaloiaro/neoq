@@ -43,7 +43,7 @@ const (
 					FROM neoq_jobs
 					WHERE queue = $1
 					AND status != "processed"
-					AND run_after <= datetime("now")`
+					AND run_after < datetime("now")`
 	FutureJobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE queue = $1
@@ -188,6 +188,11 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 	// }
 	// defer conn.Release()
 
+	// PS::lock here
+	s.mu.Lock()
+
+	log.Println("PS::Enqueue acquired lock for access to db")
+
 	s.logger.Debug("beginning new transaction to enqueue job", slog.String("queue", job.Queue))
 	tx, err := s.db.Begin()
 	// s.logger.Debug("PS::tx", tx)
@@ -196,10 +201,6 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 		s.logger.Debug(err.Error())
 		return
 	}
-
-	// PS::lock here
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// // Rollback is safe to call even if the tx is already closed, so if
 	// // the tx commits successfully, this is a no-op
@@ -217,6 +218,8 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 		return
 	}
 	s.logger.Debug("job added to queue:", slog.String("queue", job.Queue), slog.String("job_id", jobID))
+
+	s.mu.Unlock()
 
 	// PS::send to channel
 	// go func() {
@@ -444,28 +447,14 @@ func (s *SqliteBackend) listen(ctx context.Context, queue string) (c chan string
 }
 
 func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error) {
-	log.Println("PS::handleJob start")
+	log.Println("PS::handleJob start", jobID)
 	// log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
-
-	// try := s.mu.TryLock()
-	// if !try {
-	// 	return
-	// }
-	// defer s.mu.Unlock()
 
 	job, err := s.getJobWithoutTx(ctx, jobID)
 	if err != nil {
 		log.Println("PS::could not retrieve row with jobid", jobID)
 		return
 	}
-	// log.Println("PS::get job done", jobID, job)
-
-	// if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
-	// 	err = jobs.ErrJobExceededDeadline
-	// 	s.logger.Debug("job deadline is in the past, skipping", slog.String("queue", job.Queue), slog.Int64("job_id", job.ID))
-	// 	err = s.updateJob(ctx, err)
-	// 	return
-	// }
 
 	// check if the job is being retried and increment retry count accordingly
 	if job.Status != internal.JobStatusNew {
@@ -492,6 +481,8 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 	// PS::lock here
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	log.Println("PS::job id ", jobID, "acquired lock to access db")
 
 	tx, err = s.db.Begin()
 	if err != nil {
@@ -520,7 +511,7 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		return fmt.Errorf("%s %w", errMsg, err)
 	}
 
-	log.Println("PS::handleJob end")
+	log.Println("PS::handleJob end - committed to db", jobID)
 	// log.Println("PS::context-jobid", jobID, ctx.Value(jobID), ctx)
 
 	return nil
