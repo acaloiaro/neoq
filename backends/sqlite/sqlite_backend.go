@@ -242,15 +242,13 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 			for {
 				select {
 				case n = <-s.queueListenerChan[h.Queue]:
-					s.logger.Debug("PS::received from listener channel")
 					err = s.handleJob(ctx, n)
 				case n = <-pendingJobsChan:
-					s.logger.Debug("PS::received from pending channel")
 					err = s.handleJob(ctx, n)
 				case <-ctx.Done():
 					return
 				case <-errCh:
-					s.logger.Error("error hanlding job", "error", err)
+					s.logger.Error("error handling job", "error", err)
 					continue
 				}
 
@@ -269,32 +267,6 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 	}
 
 	return nil
-}
-
-func (s *SqliteBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan string) {
-	jobsCh = make(chan string)
-
-	go func(ctx context.Context) {
-		for {
-			jobID, err := s.getPendingJobID(ctx, queue)
-			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) || errors.Is(err, context.Canceled) {
-					break
-				}
-
-				s.logger.Error(
-					"failed to fetch pending job",
-					slog.String("queue", queue),
-					slog.Any("error", err),
-					slog.String("job_id", jobID),
-				)
-			} else {
-				jobsCh <- jobID
-			}
-		}
-	}(ctx)
-
-	return jobsCh
 }
 
 func (s *SqliteBackend) allPendingJobs(ctx context.Context, queue string) (jobsCh chan string) {
