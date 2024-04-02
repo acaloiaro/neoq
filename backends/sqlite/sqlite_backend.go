@@ -80,16 +80,16 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (sb neoq.Neoq, err 
 	cfg.IdleTransactionTimeout = neoq.DefaultIdleTxTimeout
 
 	s := &SqliteBackend{
-		cancelFuncs: []context.CancelFunc{},
-		config:      cfg,
-		cron:        cron.New(),
-		futureJobs:  make(map[string]*jobs.Job),
-		handlers:    make(map[string]handler.Handler),
-		newQueues:   make(chan string),
-		readyQueues: make(chan string),
-		// queueListenerChan: make(map[string]chan string),
-		mu:  &sync.RWMutex{},
-		mu2: &sync.RWMutex{},
+		cancelFuncs:       []context.CancelFunc{},
+		config:            cfg,
+		cron:              cron.New(),
+		futureJobs:        make(map[string]*jobs.Job),
+		handlers:          make(map[string]handler.Handler),
+		newQueues:         make(chan string),
+		readyQueues:       make(chan string),
+		queueListenerChan: make(map[string]chan string),
+		mu:                &sync.RWMutex{},
+		mu2:               &sync.RWMutex{},
 	}
 
 	// Set all options
@@ -226,6 +226,7 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 
 	s.mu.Unlock()
 	log.Println("PS::Enqueue released lock", jobID)
+	log.Println("PS::before send to channel")
 
 	// PS::send to channel
 	// go func() {
@@ -247,6 +248,8 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 	// 	)
 	// }
 
+	fmt.Println("PS::after send to channel")
+
 	return jobID, nil
 }
 
@@ -255,14 +258,13 @@ func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error
 	ctx, cancel := context.WithCancel(ctx)
 
 	s.logger.Debug("starting job processing", slog.String("queue", h.Queue))
-	s.mu.Lock()
+	s.mu2.Lock()
 	s.cancelFuncs = append(s.cancelFuncs, cancel)
 	s.handlers[h.Queue] = h
-	s.mu.Unlock()
+	s.mu2.Unlock()
 
 	s.newQueues <- h.Queue
-	s.queueListenerChan = make(map[string]chan string, 1000)
-	s.queueListenerChan[h.Queue] = make(chan string) // PS
+	s.queueListenerChan[h.Queue] = make(chan string, 1000) // PS
 
 	err = s.start(ctx, h)
 	if err != nil {
