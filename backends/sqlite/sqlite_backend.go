@@ -453,10 +453,10 @@ func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error) (err error)
 	if status == internal.JobStatusFailed {
 		runAfter = internal.CalculateBackoff(job.Retries)
 		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3, retries = $4, run_after = $5 WHERE id = $6"
-		_, err = tx.Exec(qstr, time.Now().UTC(), errMsg, status, job.Retries, runAfter, job.ID)
+		_, err = tx.ExecContext(ctx, qstr, time.Now().UTC(), errMsg, status, job.Retries, runAfter, job.ID)
 	} else {
 		qstr := "UPDATE neoq_jobs SET ran_at = $1, error = $2, status = $3 WHERE id = $4"
-		_, err = tx.Exec(qstr, time.Now().UTC(), errMsg, status, job.ID)
+		_, err = tx.ExecContext(ctx, qstr, time.Now().UTC(), errMsg, status, job.ID)
 	}
 
 	if err != nil {
@@ -591,7 +591,7 @@ func (s *SqliteBackend) enqueueJob(ctx context.Context, tx *sql.Tx, j *jobs.Job)
 	}
 
 	s.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
-	err = tx.QueryRow(`INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
+	err = tx.QueryRowContext(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		j.Queue, j.Fingerprint, j.Payload2, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
 
