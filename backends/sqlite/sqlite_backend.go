@@ -58,8 +58,6 @@ type SqliteBackend struct {
 	cron              *cron.Cron                 // scheduler for periodic jobs
 	futureJobs        map[string]*jobs.Job       // map of future job IDs to the corresponding job record
 	handlers          map[string]handler.Handler // a map of queue names to queue handlers
-	newQueues         chan string                // a channel that indicates that new queues are ready to be processed
-	readyQueues       chan string                // a channel that indicates which queues are ready to have jobs processed.
 	queueListenerChan map[string]chan string     // each queue has a listener channel to process enqueued jobs
 	logger            logging.Logger             // backend-wide logger
 	dbMutex           *sync.RWMutex              // protects concurrent access to sqlite db on SqliteBackend
@@ -77,8 +75,6 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (sb neoq.Neoq, err 
 		cron:              cron.New(),
 		futureJobs:        make(map[string]*jobs.Job),
 		handlers:          make(map[string]handler.Handler),
-		newQueues:         make(chan string),
-		readyQueues:       make(chan string),
 		queueListenerChan: make(map[string]chan string),
 		dbMutex:           &sync.RWMutex{},
 		fieldMutex:        &sync.RWMutex{},
@@ -99,9 +95,6 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (sb neoq.Neoq, err 
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize jobs database: %w", err)
 	}
-
-	// monitor handlers for changes and LISTEN when new queues are added
-	go s.newQueueMonitor(ctx)
 
 	s.cron.Start()
 
@@ -145,19 +138,6 @@ func (s *SqliteBackend) initializeDB() (err error) {
 	}
 
 	return nil
-}
-
-func (s *SqliteBackend) newQueueMonitor(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case newQueue := <-s.newQueues:
-			s.logger.Debug("configure new handler", "queue", newQueue)
-			s.logger.Debug("listening on queue", "queue", newQueue)
-			s.readyQueues <- newQueue
-		}
-	}
 }
 
 // Enqueue adds jobs to the specified queue
@@ -227,10 +207,8 @@ func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error
 	s.fieldMutex.Lock()
 	s.cancelFuncs = append(s.cancelFuncs, cancel)
 	s.handlers[h.Queue] = h
-	s.fieldMutex.Unlock()
-
-	s.newQueues <- h.Queue
 	s.queueListenerChan[h.Queue] = make(chan string, 1000)
+	s.fieldMutex.Unlock()
 
 	err = s.start(ctx, h)
 	if err != nil {
