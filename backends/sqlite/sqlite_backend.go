@@ -563,9 +563,9 @@ func (s *SqliteBackend) enqueueJob(ctx context.Context, tx *sql.Tx, j *jobs.Job)
 	}
 
 	s.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
-	err = tx.QueryRowContext(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		j.Queue, j.Fingerprint, j.Payload2, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
+	err = tx.QueryRowContext(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		j.Queue, j.Fingerprint, j.Payload2, j.RunAfter, j.Deadline).Scan(&jobID)
 
 	if err != nil {
 		err = fmt.Errorf("unable add job to queue: %w", err)
