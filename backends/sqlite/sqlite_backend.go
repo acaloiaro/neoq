@@ -28,7 +28,7 @@ var sqliteMigrationsFS embed.FS
 type contextKey struct{}
 
 const (
-	JobQuery = `SELECT id,fingerprint,queue,status,payload,retries,max_retries,run_after,deadline,ran_at,created_at,error
+	JobQuery = `SELECT id,fingerprint,queue,status,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE id = $1
 					AND status != "processed"`
@@ -37,7 +37,7 @@ const (
 					WHERE queue = $1
 					AND status != "processed"
 					AND run_after < datetime("now")`
-	FutureJobQuery = `SELECT id,fingerprint,queue,status,payload,retries,max_retries,run_after,deadline,ran_at,created_at,error
+	FutureJobQuery = `SELECT id,fingerprint,queue,status,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE queue = $1
 					AND status != "processed"
@@ -367,7 +367,7 @@ func (s *SqliteBackend) getJob(ctx context.Context, tx *sql.Tx, jobID string) (j
 	err = row.Scan(
 		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
 		&job.Payload2, &job.Retries, &job.MaxRetries,
-		&job.RunAfter, &job.Deadline, &job.RanAt, &job.CreatedAt, &job.Error,
+		&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
 	)
 	if err != nil {
 		return
@@ -381,7 +381,7 @@ func (s *SqliteBackend) getJobWithoutTx(ctx context.Context, jobID string) (job 
 	err = row.Scan(
 		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
 		&job.Payload2, &job.Retries, &job.MaxRetries,
-		&job.RunAfter, &job.Deadline, &job.RanAt, &job.CreatedAt, &job.Error,
+		&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
 	)
 	if err != nil {
 		return
@@ -460,9 +460,9 @@ func (s *SqliteBackend) moveToDeadQueue(ctx context.Context, j *jobs.Job, jobErr
 	// 	return
 	// }
 
-	// _, err = tx.Exec(ctx, `INSERT INTO neoq_dead_jobs(id, queue, fingerprint, payload, retries, max_retries, error, deadline)
-	// 	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-	// 	j.ID, j.Queue, j.Fingerprint, j.Payload2, j.Retries, j.MaxRetries, jobErr, j.Deadline)
+	// _, err = tx.Exec(ctx, `INSERT INTO neoq_dead_jobs(id, queue, fingerprint, payload, retries, max_retries, error)
+	// 	VALUES ($1, $2, $3, $4, $5, $6, $7`,
+	// 	j.ID, j.Queue, j.Fingerprint, j.Payload2, j.Retries, j.MaxRetries, jobErr)
 
 	return
 }
@@ -561,9 +561,9 @@ func (s *SqliteBackend) enqueueJob(ctx context.Context, tx *sql.Tx, j *jobs.Job)
 	}
 
 	s.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
-	err = tx.QueryRowContext(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		j.Queue, j.Fingerprint, j.Payload2, j.RunAfter, j.Deadline).Scan(&jobID)
+	err = tx.QueryRowContext(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after)
+		VALUES ($1, $2, $3, $4) RETURNING id`,
+		j.Queue, j.Fingerprint, j.Payload2, j.RunAfter).Scan(&jobID)
 
 	if err != nil {
 		err = fmt.Errorf("unable add job to queue: %w", err)
