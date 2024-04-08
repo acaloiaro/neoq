@@ -205,7 +205,7 @@ func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error
 	s.fieldMutex.Lock()
 	s.cancelFuncs = append(s.cancelFuncs, cancel)
 	s.handlers[h.Queue] = h
-	s.queueListenerChan[h.Queue] = make(chan string, 1000)
+	s.queueListenerChan[h.Queue] = make(chan string, s.config.QueueListenerChanBufferSize)
 	s.fieldMutex.Unlock()
 
 	err = s.start(ctx, h)

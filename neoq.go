@@ -16,8 +16,9 @@ const (
 	// schdule the job for execution.
 	// E.g. right now is 16:00 and a job's RunAfter is 16:30 of the same date. This job will get a dedicated goroutine
 	// to wait until the job's RunAfter, scheduling the job to be run exactly at RunAfter
-	DefaultFutureJobWindow  = 30 * time.Second
-	DefaultJobCheckInterval = 1 * time.Second
+	DefaultFutureJobWindow             = 30 * time.Second
+	DefaultJobCheckInterval            = 1 * time.Second
+	DefaultQueueListenerChanBufferSize = 1000
 )
 
 var ErrBackendNotSpecified = errors.New("a backend must be specified")
@@ -28,18 +29,19 @@ var ErrBackendNotSpecified = errors.New("a backend must be specified")
 // backends. [BackendConcurrency], for example, is only used by the redis backend. Other backends manage concurrency on a
 // per-handler basis.
 type Config struct {
-	BackendInitializer     BackendInitializer
-	BackendAuthPassword    string                   // password with which to authenticate to the backend
-	BackendConcurrency     int                      // total number of backend processes available to process jobs
-	ConnectionString       string                   // a string containing connection details for the backend
-	JobCheckInterval       time.Duration            // the interval of time between checking for new future/retry jobs
-	FutureJobWindow        time.Duration            // time duration between current time and job.RunAfter that future jobs get scheduled
-	IdleTransactionTimeout int                      // number of milliseconds PgBackend transaction may idle before the connection is killed
-	ShutdownTimeout        time.Duration            // duration to wait for jobs to finish during shutdown
-	SynchronousCommit      bool                     // Postgres: Enable synchronous commits (increases durability, decreases performance)
-	LogLevel               logging.LogLevel         // the log level of the default logger
-	PGConnectionTimeout    time.Duration            // the amount of time to wait for a connection to become available before timing out
-	RecoveryCallback       handler.RecoveryCallback // the recovery handler applied to all Handlers excuted by the associated Neoq instance
+	BackendInitializer          BackendInitializer
+	BackendAuthPassword         string                   // password with which to authenticate to the backend
+	BackendConcurrency          int                      // total number of backend processes available to process jobs
+	ConnectionString            string                   // a string containing connection details for the backend
+	JobCheckInterval            time.Duration            // the interval of time between checking for new future/retry jobs
+	FutureJobWindow             time.Duration            // time duration between current time and job.RunAfter that goroutines schedule for future jobs
+	IdleTransactionTimeout      int                      // the number of milliseconds PgBackend transaction may idle before the connection is killed
+	ShutdownTimeout             time.Duration            // duration to wait for jobs to finish during shutdown
+	SynchronousCommit           bool                     // Postgres: Enable synchronous commits (increases durability, decreases performance)
+	LogLevel                    logging.LogLevel         // the log level of the default logger
+	PGConnectionTimeout         time.Duration            // the amount of time to wait for a connection to become available before timing out
+	RecoveryCallback            handler.RecoveryCallback // the recovery handler applied to all Handlers excuted by the associated Neoq instance
+	QueueListenerChanBufferSize int                      // buffer size for queueListenerChan
 }
 
 // ConfigOption is a function that sets optional backend configuration
@@ -48,9 +50,10 @@ type ConfigOption func(c *Config)
 // NewConfig initiailizes a new Config with defaults
 func NewConfig() *Config {
 	return &Config{
-		FutureJobWindow:  DefaultFutureJobWindow,
-		JobCheckInterval: DefaultJobCheckInterval,
-		RecoveryCallback: handler.DefaultRecoveryCallback,
+		FutureJobWindow:             DefaultFutureJobWindow,
+		JobCheckInterval:            DefaultJobCheckInterval,
+		RecoveryCallback:            handler.DefaultRecoveryCallback,
+		QueueListenerChanBufferSize: DefaultQueueListenerChanBufferSize,
 	}
 }
 
@@ -140,5 +143,11 @@ func WithJobCheckInterval(interval time.Duration) ConfigOption {
 func WithLogLevel(level logging.LogLevel) ConfigOption {
 	return func(c *Config) {
 		c.LogLevel = level
+	}
+}
+
+func WithQueueListenerChanBufferSize(bufferSize int) ConfigOption {
+	return func(c *Config) {
+		c.QueueListenerChanBufferSize = bufferSize
 	}
 }
