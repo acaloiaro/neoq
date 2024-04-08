@@ -28,7 +28,7 @@ var sqliteMigrationsFS embed.FS
 type contextKey struct{}
 
 const (
-	JobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
+	JobQuery = `SELECT id,fingerprint,queue,status,payload,retries,max_retries,run_after,deadline,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE id = $1
 					AND status != "processed"`
@@ -37,7 +37,7 @@ const (
 					WHERE queue = $1
 					AND status != "processed"
 					AND run_after < datetime("now")`
-	FutureJobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
+	FutureJobQuery = `SELECT id,fingerprint,queue,status,payload,retries,max_retries,run_after,deadline,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE queue = $1
 					AND status != "processed"
@@ -353,7 +353,7 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 
 	err = tx.Commit()
 	if err != nil {
-		errMsg := "unable to commit job transaction. retrying this job may dupliate work:"
+		errMsg := "unable to commit job transaction. retrying this job may duplicate work:"
 		s.logger.Error(errMsg, slog.String("queue", h.Queue), slog.Any("error", err), slog.Int64("job_id", job.ID))
 		return fmt.Errorf("%s %w", errMsg, err)
 	}
@@ -366,8 +366,8 @@ func (s *SqliteBackend) getJob(ctx context.Context, tx *sql.Tx, jobID string) (j
 	row := tx.QueryRowContext(ctx, JobQuery, jobID)
 	err = row.Scan(
 		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
-		&job.Deadline, &job.Payload2, &job.Retries, &job.MaxRetries,
-		&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
+		&job.Payload2, &job.Retries, &job.MaxRetries,
+		&job.RunAfter, &job.Deadline, &job.RanAt, &job.CreatedAt, &job.Error,
 	)
 	if err != nil {
 		return
@@ -380,8 +380,8 @@ func (s *SqliteBackend) getJobWithoutTx(ctx context.Context, jobID string) (job 
 	row := s.db.QueryRowContext(ctx, JobQuery, jobID)
 	err = row.Scan(
 		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
-		&job.Deadline, &job.Payload2, &job.Retries, &job.MaxRetries,
-		&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
+		&job.Payload2, &job.Retries, &job.MaxRetries,
+		&job.RunAfter, &job.Deadline, &job.RanAt, &job.CreatedAt, &job.Error,
 	)
 	if err != nil {
 		return
