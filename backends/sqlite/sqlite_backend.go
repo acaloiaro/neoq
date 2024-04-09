@@ -323,9 +323,18 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		return handler.ErrNoHandlerForQueue
 	}
 
+	fmt.Printf("Current job : %+v", job)
 	ctx = withJobContext(ctx, job)
+	fmt.Printf("Updated ctx with job : %+v", ctx)
+	var tx *sql.Tx
 
 	s.dbMutex.Lock()
+	tx, err = s.db.Begin()
+	if err != nil {
+		return
+	}
+	ctx = context.WithValue(ctx, txCtxVarKey, tx)
+	fmt.Printf("Updated ctx with tx : %+v", ctx)
 	err = s.updateJob(ctx, jobErr, internal.JobStatusInProgress)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -334,12 +343,17 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		err = fmt.Errorf("error updating job status: %w", err)
 		return err
 	}
+	err = tx.Commit()
+	if err != nil {
+		errMsg := "unable to commit job transaction. retrying this job may duplicate work:"
+		s.logger.Error(errMsg, slog.String("queue", h.Queue), slog.Any("error", err), slog.Int64("job_id", job.ID))
+		_ = tx.Rollback()
+		return fmt.Errorf("%s %w", errMsg, err)
+	}
 	s.dbMutex.Unlock()
 
 	// execute the queue handler of this job
 	jobErr = handler.Exec(ctx, h)
-
-	var tx *sql.Tx
 
 	s.dbMutex.Lock()
 	defer s.dbMutex.Unlock()
