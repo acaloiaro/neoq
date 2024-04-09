@@ -405,6 +405,8 @@ func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
 }
 
 func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error, status string) (err error) {
+	fmt.Println("PS::updateJob, job status:", status)
+
 	errMsg := ""
 
 	var job *jobs.Job
@@ -424,6 +426,7 @@ func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error, status stri
 
 	// In progress job
 	if len(status) != 0 {
+		fmt.Println("PS::updating job status to in progress")
 		qstr := "UPDATE neoq_jobs SET status = $1, error = $2 WHERE id = $3"
 		_, err = tx.ExecContext(ctx, qstr, status, errMsg, job.ID)
 		return
