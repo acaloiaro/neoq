@@ -325,6 +325,17 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 
 	ctx = withJobContext(ctx, job)
 
+	s.dbMutex.Lock()
+	err = s.updateJob(ctx, jobErr, internal.JobStatusInProgress)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		err = fmt.Errorf("error updating job status: %w", err)
+		return err
+	}
+	s.dbMutex.Unlock()
+
 	// execute the queue handler of this job
 	jobErr = handler.Exec(ctx, h)
 
@@ -341,12 +352,11 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 
 	ctx = context.WithValue(ctx, txCtxVarKey, tx)
 
-	err = s.updateJob(ctx, jobErr)
+	err = s.updateJob(ctx, jobErr, "")
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-
 		err = fmt.Errorf("error updating job status: %w", err)
 		return err
 	}
@@ -394,15 +404,8 @@ func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
 	return context.WithValue(ctx, internal.JobCtxVarKey, j)
 }
 
-func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error) (err error) {
-	status := internal.JobStatusProcessed
+func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error, status string) (err error) {
 	errMsg := ""
-
-	if jobErr != nil {
-		s.logger.Error("job failed", slog.Any("job_error", jobErr))
-		status = internal.JobStatusFailed
-		errMsg = jobErr.Error()
-	}
 
 	var job *jobs.Job
 	if job, err = jobs.FromContext(ctx); err != nil {
@@ -417,6 +420,21 @@ func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error) (err error)
 	if job.MaxRetries != nil && job.Retries >= *job.MaxRetries {
 		err = s.moveToDeadQueue(ctx, job, errMsg)
 		return
+	}
+
+	// In progress job
+	if len(status) != 0 {
+		qstr := "UPDATE neoq_jobs SET status = $1, error = $2 WHERE id = $3"
+		_, err = tx.ExecContext(ctx, qstr, status, errMsg, job.ID)
+		return
+	}
+
+	status = internal.JobStatusProcessed
+
+	if jobErr != nil {
+		s.logger.Error("job failed", slog.Any("job_error", jobErr))
+		status = internal.JobStatusFailed
+		errMsg = jobErr.Error()
 	}
 
 	var runAfter time.Time
