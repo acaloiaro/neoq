@@ -578,15 +578,13 @@ func (s *SqliteBackend) SetLogger(logger logging.Logger) {
 // Shutdown shuts this backend down
 func (s *SqliteBackend) Shutdown(ctx context.Context) {
 	s.logger.Debug("starting shutdown")
-	// for queue := range s.handlers {
-
-	// }
 
 	for _, f := range s.cancelFuncs {
 		f()
 	}
 
 	s.cron.Stop()
+	s.db.Close()
 
 	s.cancelFuncs = nil
 	s.logger.Debug("shutdown complete")
