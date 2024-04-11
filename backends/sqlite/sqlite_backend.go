@@ -180,8 +180,6 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 
 	s.dbMutex.Unlock()
 
-	s.queueListenerChan[job.Queue] <- jobID
-
 	// add future jobs to the future job list
 	if job.RunAfter.After(time.Now().UTC()) {
 		s.fieldMutex.Lock()
@@ -193,6 +191,8 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 			slog.String("job_id", jobID),
 			slog.Time("run_after", job.RunAfter),
 		)
+	} else {
+		s.queueListenerChan[job.Queue] <- jobID
 	}
 
 	return jobID, nil
@@ -540,22 +540,33 @@ func (s *SqliteBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 }
 
 func (s *SqliteBackend) initFutureJobs(ctx context.Context, queue string) (err error) {
-	// rows, err := s.pool.Query(ctx, FutureJobQuery, queue)
-	// if err != nil {
-	// 	s.logger.Error("failed to fetch future jobs list", slog.String("queue", queue), slog.Any("error", err))
-	// 	return
-	// }
+	rows, err := s.db.QueryContext(ctx, FutureJobQuery, queue)
+	if err != nil {
+		s.logger.Error("failed to fetch future jobs list", slog.String("queue", queue), slog.Any("error", err))
+		return
+	}
 
-	// futureJobs, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[jobs.Job])
-	// if err != nil {
-	// 	return
-	// }
+	futureJobs := []jobs.Job{}
+	for rows.Next() {
+		job := jobs.Job{}
+		err = rows.Scan(
+			&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
+			&job.Payload2, &job.Retries, &job.MaxRetries,
+			&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
+		)
+		if err != nil {
+			s.logger.Error("err getting future job's row", slog.String("err", err.Error()))
+			return
+		}
 
-	// for _, job := range futureJobs {
-	// 	s.dbMutex.Lock()
-	// 	s.futureJobs[fmt.Sprintf("%d", job.ID)] = job
-	// 	s.dbMutex.Unlock()
-	// }
+		futureJobs = append(futureJobs, job)
+	}
+
+	for _, job := range futureJobs {
+		s.dbMutex.Lock()
+		s.futureJobs[fmt.Sprintf("%d", job.ID)] = &job
+		s.dbMutex.Unlock()
+	}
 
 	return
 }
