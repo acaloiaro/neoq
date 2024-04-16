@@ -29,16 +29,17 @@ var ErrBackendNotSpecified = errors.New("a backend must be specified")
 // per-handler basis.
 type Config struct {
 	BackendInitializer     BackendInitializer
-	BackendAuthPassword    string           // password with which to authenticate to the backend
-	BackendConcurrency     int              // total number of backend processes available to process jobs
-	ConnectionString       string           // a string containing connection details for the backend
-	JobCheckInterval       time.Duration    // the interval of time between checking for new future/retry jobs
-	FutureJobWindow        time.Duration    // time duration between current time and job.RunAfter that goroutines schedule for future jobs
-	IdleTransactionTimeout int              // the number of milliseconds PgBackend transaction may idle before the connection is killed
-	ShutdownTimeout        time.Duration    // duration to wait for jobs to finish during shutdown
-	SynchronousCommit      bool             // Postgres: Enable synchronous commits (increases durability, decreases performance)
-	LogLevel               logging.LogLevel // the log level of the default logger
-	PGConnectionTimeout    time.Duration    // the amount of time to wait for a connection to become available before timing out
+	BackendAuthPassword    string                   // password with which to authenticate to the backend
+	BackendConcurrency     int                      // total number of backend processes available to process jobs
+	ConnectionString       string                   // a string containing connection details for the backend
+	JobCheckInterval       time.Duration            // the interval of time between checking for new future/retry jobs
+	FutureJobWindow        time.Duration            // time duration between current time and job.RunAfter that future jobs get scheduled
+	IdleTransactionTimeout int                      // number of milliseconds PgBackend transaction may idle before the connection is killed
+	ShutdownTimeout        time.Duration            // duration to wait for jobs to finish during shutdown
+	SynchronousCommit      bool                     // Postgres: Enable synchronous commits (increases durability, decreases performance)
+	LogLevel               logging.LogLevel         // the log level of the default logger
+	PGConnectionTimeout    time.Duration            // the amount of time to wait for a connection to become available before timing out
+	RecoveryCallback       handler.RecoveryCallback // the recovery handler applied to all Handlers excuted by the associated Neoq instance
 }
 
 // JobOptions
@@ -58,6 +59,7 @@ func NewConfig() *Config {
 	return &Config{
 		FutureJobWindow:  DefaultFutureJobWindow,
 		JobCheckInterval: DefaultJobCheckInterval,
+		RecoveryCallback: handler.DefaultRecoveryCallback,
 	}
 }
 
@@ -123,6 +125,15 @@ func New(ctx context.Context, opts ...ConfigOption) (b Neoq, err error) {
 func WithBackend(initializer BackendInitializer) ConfigOption {
 	return func(c *Config) {
 		c.BackendInitializer = initializer
+	}
+}
+
+// WithRecoveryCallback configures neoq with a function to be called when fatal errors occur in job Handlers.
+//
+// Recovery callbacks are useful for reporting errors to error loggers and collecting error metrics
+func WithRecoveryCallback(cb handler.RecoveryCallback) ConfigOption {
+	return func(c *Config) {
+		c.RecoveryCallback = cb
 	}
 }
 

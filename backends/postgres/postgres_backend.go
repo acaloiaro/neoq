@@ -450,6 +450,7 @@ func (p *PgBackend) Start(ctx context.Context, h handler.Handler) (err error) {
 	p.logger.Debug("starting job processing", slog.String("queue", h.Queue))
 	p.mu.Lock()
 	p.cancelFuncs = append(p.cancelFuncs, cancel)
+	h.RecoverCallback = p.config.RecoveryCallback
 	p.handlers[h.Queue] = h
 	p.mu.Unlock()
 
@@ -491,6 +492,7 @@ func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Ha
 
 	queue := internal.StripNonAlphanum(strcase.ToSnake(*cdStr))
 	h.Queue = queue
+	h.RecoverCallback = p.config.RecoveryCallback
 
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()

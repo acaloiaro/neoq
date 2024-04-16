@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"golang.org/x/exp/slog"
 )
 
 const (
@@ -24,13 +25,23 @@ var (
 // Func is a function that Handlers execute for every Job on a queue
 type Func func(ctx context.Context) error
 
+// RecoveryCallback is a function to be called when fatal errors/panics occur in Handlers
+type RecoveryCallback func(ctx context.Context, err error) (erro error)
+
+// DefaultRecoveryCallback is the function that gets called by default when handlers panic
+func DefaultRecoveryCallback(_ context.Context, _ error) (err error) {
+	slog.Error("recovering from a panic in the job handler", slog.Any("stack", string(debug.Stack())))
+	return nil
+}
+
 // Handler handles jobs on a queue
 type Handler struct {
-	Handle        Func
-	Concurrency   int
-	JobTimeout    time.Duration
-	QueueCapacity int64
-	Queue         string
+	Handle          Func
+	Concurrency     int
+	JobTimeout      time.Duration
+	QueueCapacity   int64
+	Queue           string
+	RecoverCallback RecoveryCallback // function called when fatal handler errors occur
 }
 
 // Option is function that sets optional configuration for Handlers
@@ -75,6 +86,13 @@ func Queue(queue string) Option {
 	}
 }
 
+// RecoverCallback configures the handler with a recovery function to be called when fatal errors occur in Handlers
+func RecoverCallback(f RecoveryCallback) Option {
+	return func(h *Handler) {
+		h.RecoverCallback = f
+	}
+}
+
 // New creates new queue handlers for specific queues. This function is to be usued to create new Handlers for
 // non-periodic jobs (most jobs). Use [NewPeriodic] to initialize handlers for periodic jobs.
 func New(queue string, f Func, opts ...Option) (h Handler) {
@@ -104,6 +122,24 @@ func NewPeriodic(f Func, opts ...Option) (h Handler) {
 	return
 }
 
+func errorFromPanic(x any) (err error) {
+	_, file, line, ok := runtime.Caller(1) // skip the first frame (panic itself)
+	if ok && strings.Contains(file, "runtime/") {
+		// The panic came from the runtime, most likely due to incorrect
+		// map/slice usage. The parent frame should have the real trigger.
+		_, file, line, ok = runtime.Caller(2) //nolint: gomnd
+	}
+
+	// Include the file and line number info in the error, if runtime.Caller returned ok.
+	if ok {
+		err = fmt.Errorf("panic [%s:%d]: %v", file, line, x) // nolint: goerr113
+	} else {
+		err = fmt.Errorf("panic: %v", x) // nolint: goerr113
+	}
+
+	return
+}
+
 // Exec executes handler functions with a concrete timeout
 func Exec(ctx context.Context, handler Handler) (err error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, handler.JobTimeout)
@@ -115,22 +151,15 @@ func Exec(ctx context.Context, handler Handler) (err error) {
 	go func(ctx context.Context) {
 		defer func() {
 			if x := recover(); x != nil {
-				log.Printf("recovering from a panic in the job handler:\n%s", string(debug.Stack()))
-				_, file, line, ok := runtime.Caller(1) // skip the first frame (panic itself)
-				if ok && strings.Contains(file, "runtime/") {
-					// The panic came from the runtime, most likely due to incorrect
-					// map/slice usage. The parent frame should have the real trigger.
-					_, file, line, ok = runtime.Caller(2) //nolint: gomnd
-				}
-
-				// Include the file and line number info in the error, if runtime.Caller returned ok.
-				if ok {
-					errCh <- fmt.Errorf("panic [%s:%d]: %v", file, line, x) // nolint: goerr113
-				} else {
-					errCh <- fmt.Errorf("panic: %v", x) // nolint: goerr113
+				err = errorFromPanic(x)
+				errCh <- err
+				if handler.RecoverCallback != nil {
+					err = handler.RecoverCallback(ctx, err)
+					if err != nil {
+						slog.Error("handler recovery callback also failed while recovering from panic", slog.Any("error", err))
+					}
 				}
 			}
-
 			done <- true
 		}()
 

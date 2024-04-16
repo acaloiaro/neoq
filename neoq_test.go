@@ -244,3 +244,57 @@ results_loop:
 		t.Error(err)
 	}
 }
+
+func TestHandlerRecoveryCallback(t *testing.T) {
+	const queue = "testing"
+	timeoutTimer := time.After(5 * time.Second)
+	recoveryFuncCalled := make(chan bool, 1)
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(memory.Backend),
+		neoq.WithRecoveryCallback(func(_ context.Context, _ error) (err error) {
+			recoveryFuncCalled <- true
+			return
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(ctx context.Context) (err error) {
+		panic("abort mission!")
+	})
+	h.WithOptions(
+		handler.JobTimeout(500*time.Millisecond),
+		handler.Concurrency(1),
+	)
+
+	// process jobs on the test queue
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jid, err := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+	})
+	if err != nil || jid == jobs.DuplicateJobID {
+		t.Fatal("job was not enqueued. either it was duplicate or this error caused it:", err)
+	}
+
+	select {
+	case <-timeoutTimer:
+		err = errors.New("timed out waiting for job") // nolint: goerr113
+		return
+	case <-recoveryFuncCalled:
+		break
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
+}

@@ -145,6 +145,8 @@ func (m *MemBackend) Start(ctx context.Context, h handler.Handler) (err error) {
 		queueCapacity = defaultMemQueueCapacity
 	}
 
+	h.RecoverCallback = m.config.RecoveryCallback
+
 	m.handlers.Store(h.Queue, h)
 	m.queues.Store(h.Queue, make(chan *jobs.Job, queueCapacity))
 
@@ -183,6 +185,7 @@ func (m *MemBackend) StartCron(ctx context.Context, cronSpec string, h handler.H
 	m.cancelFuncs = append(m.cancelFuncs, cancel)
 	m.mu.Unlock()
 	h.Queue = queue
+	h.RecoverCallback = m.config.RecoveryCallback
 
 	err = m.Start(ctx, h)
 	if err != nil {

@@ -9,14 +9,12 @@ import (
 	"time"
 
 	"github.com/acaloiaro/neoq"
-	"github.com/acaloiaro/neoq/backends"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
 	"github.com/acaloiaro/neoq/testutils"
 	"github.com/hibiken/asynq"
-	"github.com/stretchr/testify/suite"
 )
 
 const (
@@ -444,7 +442,13 @@ result_loop:
 	}
 }
 
-func TestSuite(t *testing.T) {
+func TestHandlerRecoveryCallback(t *testing.T) {
+	const queue = "testing"
+	timeoutTimer := time.After(5 * time.Second)
+	recoveryFuncCalled := make(chan bool, 1)
+	defer close(recoveryFuncCalled)
+	ctx := context.Background()
+
 	connString := os.Getenv("TEST_REDIS_URL")
 	if connString == "" {
 		t.Skip("Skipping: TEST_REDIS_URL not set")
@@ -452,17 +456,55 @@ func TestSuite(t *testing.T) {
 	}
 
 	password := os.Getenv("REDIS_PASSWORD")
-	ctx := context.Background()
 	nq, err := neoq.New(
 		ctx,
 		neoq.WithBackend(Backend),
+		neoq.WithLogLevel(logging.LogLevelDebug),
 		WithAddr(connString),
 		WithPassword(password),
-		WithShutdownTimeout(500*time.Millisecond))
+		neoq.WithRecoveryCallback(func(ctx context.Context, _ error) (err error) {
+			recoveryFuncCalled <- true
+			return
+		}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer nq.Shutdown(ctx)
 
-	s := backends.NewNeoQTestSuite(nq)
-	suite.Run(t, s)
+	h := handler.New(queue, func(ctx context.Context) (err error) {
+		panic("abort mission!")
+	})
+	h.WithOptions(
+		handler.JobTimeout(500*time.Millisecond),
+		handler.Concurrency(1),
+	)
+
+	// process jobs on the test queue
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jid, err := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": fmt.Sprintf("hello world %d", internal.RandInt(10000000)),
+		},
+	})
+	if err != nil || jid == jobs.DuplicateJobID {
+		t.Fatal("job was not enqueued. either it was duplicate or this error caused it:", err)
+	}
+
+	select {
+	case <-timeoutTimer:
+		err = errors.New("timed out waiting for job") // nolint: goerr113
+		return
+	case <-recoveryFuncCalled:
+		break
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
 }
