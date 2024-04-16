@@ -441,3 +441,70 @@ result_loop:
 		t.Error(err)
 	}
 }
+
+func TestHandlerRecoveryCallback(t *testing.T) {
+	const queue = "testing"
+	timeoutTimer := time.After(5 * time.Second)
+	recoveryFuncCalled := make(chan bool, 1)
+	defer close(recoveryFuncCalled)
+	ctx := context.Background()
+
+	connString := os.Getenv("TEST_REDIS_URL")
+	if connString == "" {
+		t.Skip("Skipping: TEST_REDIS_URL not set")
+		return
+	}
+
+	password := os.Getenv("REDIS_PASSWORD")
+	nq, err := neoq.New(
+		ctx,
+		neoq.WithBackend(Backend),
+		neoq.WithLogLevel(logging.LogLevelDebug),
+		WithAddr(connString),
+		WithPassword(password),
+		neoq.WithRecoveryCallback(func(ctx context.Context, _ error) (err error) {
+			recoveryFuncCalled <- true
+			return
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(ctx context.Context) (err error) {
+		panic("abort mission!")
+	})
+	h.WithOptions(
+		handler.JobTimeout(500*time.Millisecond),
+		handler.Concurrency(1),
+	)
+
+	// process jobs on the test queue
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jid, err := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": fmt.Sprintf("hello world %d", internal.RandInt(10000000)),
+		},
+	})
+	if err != nil || jid == jobs.DuplicateJobID {
+		t.Fatal("job was not enqueued. either it was duplicate or this error caused it:", err)
+	}
+
+	select {
+	case <-timeoutTimer:
+		err = errors.New("timed out waiting for job") // nolint: goerr113
+		return
+	case <-recoveryFuncCalled:
+		break
+	}
+
+	if err != nil {
+		t.Error(err)
+	}
+}

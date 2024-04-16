@@ -206,6 +206,8 @@ func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string
 
 // Start starts processing jobs with the specified queue and handler
 func (b *RedisBackend) Start(_ context.Context, h handler.Handler) (err error) {
+	h.RecoverCallback = b.config.RecoveryCallback
+
 	b.mux.HandleFunc(h.Queue, func(ctx context.Context, t *asynq.Task) (err error) {
 		taskID := t.ResultWriter().TaskID()
 		var p map[string]any
@@ -268,6 +270,7 @@ func (b *RedisBackend) StartCron(ctx context.Context, cronSpec string, h handler
 
 	queue := internal.StripNonAlphanum(strcase.ToSnake(*cdStr))
 	h.Queue = queue
+	h.RecoverCallback = b.config.RecoveryCallback
 
 	err = b.Start(ctx, h)
 	if err != nil {
