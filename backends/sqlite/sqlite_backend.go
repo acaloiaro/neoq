@@ -484,14 +484,14 @@ func txFromContext(ctx context.Context) (t *sql.Tx, err error) {
 }
 
 func (s *SqliteBackend) moveToDeadQueue(ctx context.Context, j *jobs.Job, jobErr string) (err error) {
-	// _, err = tx.Exec(ctx, "DELETE FROM neoq_jobs WHERE id = $1", j.ID)
-	// if err != nil {
-	// 	return
-	// }
+	_, err = s.db.ExecContext(ctx, "DELETE FROM neoq_jobs WHERE id = $1", j.ID)
+	if err != nil {
+		return
+	}
 
-	// _, err = tx.Exec(ctx, `INSERT INTO neoq_dead_jobs(id, queue, fingerprint, payload, retries, max_retries, error)
-	// 	VALUES ($1, $2, $3, $4, $5, $6, $7`,
-	// 	j.ID, j.Queue, j.Fingerprint, j.Payload2, j.Retries, j.MaxRetries, jobErr)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO neoq_dead_jobs(queue, fingerprint, payload, retries, max_retries, error)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		j.Queue, j.Fingerprint, j.Payload2, j.Retries, j.MaxRetries, jobErr)
 
 	return
 }
