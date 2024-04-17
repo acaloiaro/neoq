@@ -13,6 +13,8 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/iancoleman/strcase"
+	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 	"github.com/pranavmodx/neoq-sqlite"
 	"github.com/pranavmodx/neoq-sqlite/handler"
 	"github.com/pranavmodx/neoq-sqlite/internal"
@@ -49,6 +51,7 @@ const (
 var (
 	txCtxVarKey               contextKey
 	ErrNoTransactionInContext = errors.New("context does not have a Tx set")
+	ErrDuplicateJob           = errors.New("duplicate job")
 )
 
 type SqliteBackend struct {
@@ -568,8 +571,58 @@ func WithConnectionString(connectionString string) neoq.ConfigOption {
 	}
 }
 
+// StartCron starts processing jobs with the specified cron schedule and handler
+//
+// See: https://pkg.go.dev/github.com/robfig/cron?#hdr-CRON_Expression_Format for details on the cron spec format
 func (s *SqliteBackend) StartCron(ctx context.Context, cronSpec string, h handler.Handler) (err error) {
-	return nil
+	cd, err := crondescriptor.NewCronDescriptor(cronSpec)
+	if err != nil {
+		s.logger.Error(
+			"error creating cron descriptor",
+			slog.String("queue", h.Queue),
+			slog.String("cronspec", cronSpec),
+			slog.Any("error", err),
+		)
+		return fmt.Errorf("error creating cron descriptor: %w", err)
+	}
+
+	cdStr, err := cd.GetDescription(crondescriptor.Full)
+	if err != nil {
+		s.logger.Error(
+			"error getting cron descriptor",
+			slog.String("queue", h.Queue),
+			slog.Any("descriptor", crondescriptor.Full),
+			slog.Any("error", err),
+		)
+		return fmt.Errorf("error getting cron description: %w", err)
+	}
+
+	queue := internal.StripNonAlphanum(strcase.ToSnake(*cdStr))
+	h.Queue = queue
+
+	ctx, cancel := context.WithCancel(ctx)
+	s.fieldMutex.Lock()
+	s.cancelFuncs = append(s.cancelFuncs, cancel)
+	s.fieldMutex.Unlock()
+
+	if err = s.cron.AddFunc(cronSpec, func() {
+		_, err := s.Enqueue(ctx, &jobs.Job{Queue: queue})
+		if err != nil {
+			// When we are working with a cron we want to ignore the canceled and the duplicate job errors. The duplicate job
+			// error specifically is not one the cron enqueuer needs to concern itself with because that means that another
+			// worker has already enqueued the job for this cron recurrence. It is not helpful to log the error in that
+			// scenario since the job will be processed.
+			if errors.Is(err, context.Canceled) || errors.Is(err, ErrDuplicateJob) {
+				return
+			}
+
+			s.logger.Error("error queueing cron job", slog.String("queue", h.Queue), slog.Any("error", err))
+		}
+	}); err != nil {
+		return fmt.Errorf("error adding cron: %w", err)
+	}
+
+	return s.Start(ctx, h)
 }
 
 // SetLogger sets this backend's logger
