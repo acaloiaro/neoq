@@ -6,7 +6,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
@@ -304,8 +303,6 @@ func (s *SqliteBackend) getAllPendingJobIDs(ctx context.Context, queue string) (
 }
 
 func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error) {
-	log.Println("PS::handleJob start")
-
 	job, err := s.getJobWithoutTx(ctx, jobID)
 	if err != nil {
 		s.logger.Error("could not retrieve row with job id", slog.String("err", err.Error()))
@@ -326,9 +323,7 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		return handler.ErrNoHandlerForQueue
 	}
 
-	log.Printf("Current job : %+v", job)
 	ctx = withJobContext(ctx, job)
-	log.Printf("Updated ctx with job : %+v", ctx)
 	var tx *sql.Tx
 
 	s.dbMutex.Lock()
@@ -337,7 +332,6 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		return
 	}
 	ctx = context.WithValue(ctx, txCtxVarKey, tx)
-	log.Printf("Updated ctx with tx : %+v", ctx)
 	err = s.updateJob(ctx, jobErr, internal.JobStatusInProgress)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -422,8 +416,6 @@ func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
 }
 
 func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error, status string) (err error) {
-	log.Println("PS::updateJob, job status:", status)
-
 	errMsg := ""
 
 	var job *jobs.Job
@@ -443,7 +435,6 @@ func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error, status stri
 
 	// In progress job
 	if len(status) != 0 {
-		log.Println("PS::updating job status to in progress")
 		qstr := "UPDATE neoq_jobs SET status = $1, error = $2 WHERE id = $3"
 		_, err = tx.ExecContext(ctx, qstr, status, errMsg, job.ID)
 		return
