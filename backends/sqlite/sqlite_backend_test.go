@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,7 +144,7 @@ func TestBasicJobProcessing(t *testing.T) {
 	}
 }
 
-// TestBasicJobMultipleQueue tests that the postgres backend is able to process jobs on multiple queues
+// TestBasicJobMultipleQueue tests that the sqlite backend is able to process jobs on multiple queues
 func TestBasicJobMultipleQueue(t *testing.T) {
 	const queue = "testing"
 	const queue2 = "testing2"
@@ -265,5 +266,114 @@ func TestCron(t *testing.T) {
 
 	if err != nil {
 		t.Error(err)
+	}
+}
+
+// TestBasicJobProcessingWithErrors tests that the sqlite backend is able to update the status of jobs that fail
+func TestBasicJobProcessingWithErrors(t *testing.T) {
+	const queue = "testing"
+	logsChan := make(chan string, 100)
+	timeoutTimer := time.After(5 * time.Second)
+	connString, _ := prepareAndCleanupDB(t)
+
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(sqlite.Backend),
+		sqlite.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelError))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		err = errors.New("something bad happened") // nolint: goerr113
+		return
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+results_loop:
+	for {
+		select {
+		case <-timeoutTimer:
+			err = jobs.ErrJobTimeout
+			break results_loop
+		case actualLogMsg := <-logsChan:
+			expectedLogMsg := "job failed to process: something bad happened"
+			if strings.Contains(actualLogMsg, expectedLogMsg) {
+				err = nil
+				break results_loop
+			}
+			err = fmt.Errorf("'%s' NOT CONTAINS '%s'", actualLogMsg, expectedLogMsg) //nolint:all
+		}
+	}
+
+	if err != nil && err != jobs.ErrJobTimeout {
+		t.Error(err)
+	}
+}
+
+// TestFutureJobProcessing tests that the sqlite backend is able to schedule and run future jobs
+func TestFutureJobProcessing(t *testing.T) {
+	connString, _ := prepareAndCleanupDB(t)
+	const queue = "testing"
+	done := make(chan bool)
+	defer close(done)
+
+	timeoutTimer := time.After(5 * time.Second)
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx, neoq.WithBackend(sqlite.Backend), sqlite.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+	job := &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+		RunAfter: time.Now().Add(time.Second * 1),
+	}
+	jid, e := nq.Enqueue(ctx, job)
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+	if err != nil {
+		t.Error(err)
+	}
+
+	if time.Now().Before(job.RunAfter) {
+		t.Error("job ran before RunAfter")
 	}
 }
