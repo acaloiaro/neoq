@@ -6,8 +6,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/pranavmodx/neoq-sqlite"
-	"github.com/pranavmodx/neoq-sqlite/logging"
+	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/logging"
 	"github.com/robfig/cron"
 )
 

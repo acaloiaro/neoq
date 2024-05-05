@@ -11,17 +11,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends/sqlite"
+	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/internal"
+	"github.com/acaloiaro/neoq/jobs"
+	"github.com/acaloiaro/neoq/logging"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/sqlite3"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/pranavmodx/neoq-sqlite"
-	"github.com/pranavmodx/neoq-sqlite/backends/sqlite"
-	"github.com/pranavmodx/neoq-sqlite/handler"
-	"github.com/pranavmodx/neoq-sqlite/internal"
-	"github.com/pranavmodx/neoq-sqlite/jobs"
-	"github.com/pranavmodx/neoq-sqlite/logging"
 )
 
 //go:embed migrations/*.sql
