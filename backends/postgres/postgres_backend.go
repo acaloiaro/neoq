@@ -5,7 +5,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"sync"
@@ -463,7 +462,6 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 
 // Start starts processing jobs with the specified queue and handler
 func (p *PgBackend) Start(ctx context.Context, h handler.Handler) (err error) {
-	log.Println("PS::from local")
 	ctx, cancel := context.WithCancel(ctx)
 
 	p.logger.Debug("starting job processing", slog.String("queue", h.Queue))
@@ -842,7 +840,6 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 
 		for {
 			jobID, err := p.getPendingJobID(ctx, conn, queue)
-			log.Println("PS::got pending job id:", jobID)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, context.Canceled) {
 					break
@@ -869,17 +866,14 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 // 2. handleJob secondly calls the handler on the job, and finally updates the job's status
 // nolint: cyclop
 func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
-	log.Println("PS::handleJob called for job id", jobID)
 	var job *jobs.Job
 	var tx pgx.Tx
 	conn, err := p.acquire(ctx)
 	if err != nil {
-		log.Println("PS::could not acquire conn so exiting for jobid", jobID)
 		return
 	}
 	defer conn.Release()
 
-	log.Println("PS::handleJob conn.begin", jobID)
 	tx, err = conn.Begin(ctx)
 	if err != nil {
 		return
@@ -888,10 +882,8 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 
 	job, err = p.getJob(ctx, tx, jobID)
 	if err != nil {
-		log.Println("PS::could not get job", jobID, err)
 		return
 	}
-	log.Println("PS::get job", jobID, job)
 
 	ctx = withJobContext(ctx, job)
 	ctx = context.WithValue(ctx, txCtxVarKey, tx)
@@ -928,7 +920,6 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 		return handler.ErrNoHandlerForQueue
 	}
 
-	log.Println("PS::just before to handler.Exec()")
 	// execute the queue handler of this job
 	jobErr = handler.Exec(ctx, h)
 	err = p.updateJob(ctx, jobErr)
