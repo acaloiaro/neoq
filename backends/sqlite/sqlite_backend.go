@@ -90,9 +90,9 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (sb neoq.Neoq, err 
 
 	s.logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: s.config.LogLevel}))
 	ctx, cancel := context.WithCancel(ctx)
-	s.dbMutex.Lock()
+	s.fieldMutex.Lock()
 	s.cancelFuncs = append(s.cancelFuncs, cancel)
-	s.dbMutex.Unlock()
+	s.fieldMutex.Unlock()
 
 	err = s.initializeDB()
 	if err != nil {
@@ -106,6 +106,11 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (sb neoq.Neoq, err 
 	return sb, nil
 }
 
+// initializeDB initializes the tables, types, and indices necessary to operate Neoq
+//
+// This will consume the migration files embedded at build time and will connect to the DB using its own tooling and
+// perform the migrations. After which it will close its DB connections since they will not be needed after
+// initialization.
 func (s *SqliteBackend) initializeDB() (err error) {
 	migrations, err := iofs.New(sqliteMigrationsFS, "migrations")
 	if err != nil {
@@ -151,13 +156,12 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 	s.logger.Debug("enqueueing job payload", slog.String("queue", job.Queue), slog.Any("job_payload", job.Payload2))
 
 	s.dbMutex.Lock()
+	defer s.dbMutex.Unlock()
 
 	s.logger.Debug("beginning new transaction to enqueue job", slog.String("queue", job.Queue))
 	tx, err := s.db.Begin()
 	if err != nil {
 		err = fmt.Errorf("error creating transaction: %w", err)
-		s.logger.Debug(err.Error())
-		s.dbMutex.Unlock()
 		return
 	}
 
@@ -168,25 +172,19 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 	if err != nil {
 		s.logger.Error("error enqueueing job", slog.String("queue", job.Queue), slog.Any("error", err))
 		err = fmt.Errorf("error enqueuing job: %w", err)
-		s.dbMutex.Unlock()
 		return
 	}
 
 	err = tx.Commit()
 	if err != nil {
 		err = fmt.Errorf("error committing transaction: %w", err)
-		s.dbMutex.Unlock()
 		return
 	}
 	s.logger.Debug("job added to queue:", slog.String("queue", job.Queue), slog.String("job_id", jobID))
 
-	s.dbMutex.Unlock()
-
 	// add future jobs to the future job list
 	if job.RunAfter.After(time.Now().UTC()) {
-		s.fieldMutex.Lock()
 		s.futureJobs[jobID] = job
-		s.fieldMutex.Unlock()
 		s.logger.Debug(
 			"added job to future jobs list",
 			slog.String("queue", job.Queue),
@@ -207,6 +205,7 @@ func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error
 	s.logger.Debug("starting job processing", slog.String("queue", h.Queue))
 	s.fieldMutex.Lock()
 	s.cancelFuncs = append(s.cancelFuncs, cancel)
+	h.RecoverCallback = s.config.RecoveryCallback
 	s.handlers[h.Queue] = h
 	s.queueListenerChan[h.Queue] = make(chan string, s.config.QueueListenerChanBufferSize)
 	s.fieldMutex.Unlock()
@@ -222,7 +221,6 @@ func (s *SqliteBackend) Start(ctx context.Context, h handler.Handler) (err error
 // start starts processing new, pending, and future jobs
 func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error) {
 	var ok bool
-	// var listenJobChan chan string
 	var errCh chan error
 
 	if h, ok = s.handlers[h.Queue]; !ok {
@@ -305,8 +303,14 @@ func (s *SqliteBackend) getAllPendingJobIDs(ctx context.Context, queue string) (
 	return jobIDs, nil
 }
 
+// handleJob is the workhorse of Neoq
+// it receives pending, periodic, and retry job ids asynchronously
+// 1. handleJob first creates a transaction before which a db lock is acquired
+// 2. handleJob secondly calls the handler on the job, and finally updates the job's status
 func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error) {
-	job, err := s.getJobWithoutTx(ctx, jobID)
+	var tx *sql.Tx
+
+	job, err := s.getJob(ctx, jobID)
 	if err != nil {
 		s.logger.Error("could not retrieve row with job id", slog.String("err", err.Error()))
 		return
@@ -327,30 +331,8 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 	}
 
 	ctx = withJobContext(ctx, job)
-	var tx *sql.Tx
 
-	s.dbMutex.Lock()
-	tx, err = s.db.Begin()
-	if err != nil {
-		return
-	}
-	ctx = context.WithValue(ctx, txCtxVarKey, tx)
-	err = s.updateJob(ctx, jobErr, internal.JobStatusInProgress)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		err = fmt.Errorf("error updating job status: %w", err)
-		return err
-	}
-	err = tx.Commit()
-	if err != nil {
-		errMsg := "unable to commit job transaction. retrying this job may duplicate work:"
-		s.logger.Error(errMsg, slog.String("queue", h.Queue), slog.Any("error", err), slog.Int64("job_id", job.ID))
-		_ = tx.Rollback()
-		return fmt.Errorf("%s %w", errMsg, err)
-	}
-	s.dbMutex.Unlock()
+	s.updateJobToInProgress(ctx, h, job)
 
 	// execute the queue handler of this job
 	jobErr = handler.Exec(ctx, h)
@@ -385,21 +367,39 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 	return nil
 }
 
-func (s *SqliteBackend) getJob(ctx context.Context, tx *sql.Tx, jobID string) (job *jobs.Job, err error) {
-	job = &jobs.Job{}
-	row := tx.QueryRowContext(ctx, JobQuery, jobID)
-	err = row.Scan(
-		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
-		&job.Payload2, &job.Retries, &job.MaxRetries,
-		&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
-	)
+func (s *SqliteBackend) updateJobToInProgress(ctx context.Context, h handler.Handler, job *jobs.Job) (err error) {
+	var tx *sql.Tx
+	var jobErr error
+
+	s.dbMutex.Lock()
+	defer s.dbMutex.Unlock()
+
+	tx, err = s.db.Begin()
 	if err != nil {
 		return
+	}
+
+	ctx = context.WithValue(ctx, txCtxVarKey, tx)
+
+	err = s.updateJob(ctx, jobErr, internal.JobStatusInProgress)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		err = fmt.Errorf("error updating job status: %w", err)
+		return err
+	}
+	err = tx.Commit()
+	if err != nil {
+		errMsg := "unable to commit job transaction. retrying this job may duplicate work:"
+		s.logger.Error(errMsg, slog.String("queue", h.Queue), slog.Any("error", err), slog.Int64("job_id", job.ID))
+		_ = tx.Rollback()
+		return fmt.Errorf("%s %w", errMsg, err)
 	}
 	return
 }
 
-func (s *SqliteBackend) getJobWithoutTx(ctx context.Context, jobID string) (job *jobs.Job, err error) {
+func (s *SqliteBackend) getJob(ctx context.Context, jobID string) (job *jobs.Job, err error) {
 	job = &jobs.Job{}
 	row := s.db.QueryRowContext(ctx, JobQuery, jobID)
 	err = row.Scan(
@@ -418,6 +418,21 @@ func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
 	return context.WithValue(ctx, internal.JobCtxVarKey, j)
 }
 
+// updateJob updates the status of jobs with: status, run time, error messages, and retries
+//
+// if the retry count exceeds the maximum number of retries for the job, move the job to the dead jobs queue
+//
+// if `tx`'s underlying connection dies while updating job status, the transaction will fail, and the job's original
+// status will be reflecting in the database.
+//
+// The implication of this is that:
+// - the job's 'error' field will not reflect any errors the occurred in the handler
+// - the job's retry count is not incremented
+// - the job's run time will remain its original value
+// - the job has its original 'status'
+//
+// ultimately, this means that any time a database connection is lost while updating job status, then the job will be
+// processed at least one more time.
 func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error, status string) (err error) {
 	errMsg := ""
 
@@ -499,6 +514,7 @@ func (s *SqliteBackend) moveToDeadQueue(ctx context.Context, j *jobs.Job, jobErr
 	return
 }
 
+// scheduleFutureJobs announces future jobs using queueListenerChan
 func (s *SqliteBackend) scheduleFutureJobs(ctx context.Context, queue string) {
 	err := s.initFutureJobs(ctx, queue)
 	if err != nil {
