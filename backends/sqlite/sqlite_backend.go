@@ -194,7 +194,9 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 			slog.Time("run_after", job.RunAfter),
 		)
 	} else {
+		s.fieldMutex.Lock()
 		s.queueListenerChan[job.Queue] <- jobID
+		s.fieldMutex.Unlock()
 	}
 
 	return jobID, nil
@@ -235,6 +237,8 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 	// process all future jobs and retries
 	go func() { s.scheduleFutureJobs(ctx, h.Queue) }()
 
+	queueChan := s.queueListenerChan[h.Queue]
+
 	for i := 0; i < h.Concurrency; i++ {
 		go func() {
 			var err error
@@ -242,7 +246,7 @@ func (s *SqliteBackend) start(ctx context.Context, h handler.Handler) (err error
 
 			for {
 				select {
-				case n = <-s.queueListenerChan[h.Queue]:
+				case n = <-queueChan:
 					err = s.handleJob(ctx, n)
 				case n = <-pendingJobsChan:
 					err = s.handleJob(ctx, n)
