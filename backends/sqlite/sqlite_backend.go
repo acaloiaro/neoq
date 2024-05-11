@@ -184,7 +184,9 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 
 	// add future jobs to the future job list
 	if job.RunAfter.After(time.Now().UTC()) {
+		s.fieldMutex.Lock()
 		s.futureJobs[jobID] = job
+		s.fieldMutex.Unlock()
 		s.logger.Debug(
 			"added job to future jobs list",
 			slog.String("queue", job.Queue),
@@ -573,9 +575,9 @@ func (s *SqliteBackend) initFutureJobs(ctx context.Context, queue string) (err e
 	}
 
 	for _, job := range futureJobs {
-		s.dbMutex.Lock()
+		s.fieldMutex.Lock()
 		s.futureJobs[fmt.Sprintf("%d", job.ID)] = &job
-		s.dbMutex.Unlock()
+		s.fieldMutex.Unlock()
 	}
 
 	return
