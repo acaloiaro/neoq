@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +28,10 @@ import (
 
 //go:embed migrations/*.sql
 var sqliteMigrationsFS embed.FS
+
+const (
+	ConcurrentWorkers = 8
+)
 
 var errPeriodicTimeout = errors.New("timed out waiting for periodic job")
 
@@ -76,7 +82,11 @@ func TestBasicJobProcessing(t *testing.T) {
 	timeoutTimer := time.After(5 * time.Second)
 
 	ctx := context.Background()
-	nq, err := neoq.New(ctx, neoq.WithBackend(sqlite.Backend), sqlite.WithConnectionString(connString))
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(sqlite.Backend),
+		sqlite.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelDebug),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +151,73 @@ func TestBasicJobProcessing(t *testing.T) {
 
 	if jqueue != queue {
 		t.Error(fmt.Errorf("job queue does not match its expected value: %v != %v", jqueue, queue))
+	}
+}
+
+func TestMultipleProcessors(t *testing.T) {
+	const queue = "testing"
+	var execCount uint32
+	var wg sync.WaitGroup
+
+	connString, _ := prepareAndCleanupDB(t)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		atomic.AddUint32(&execCount, 1)
+		wg.Done()
+		return
+	})
+	// Make sure that each neoq worker only works on one thing at a time.
+	h.Concurrency = 1
+
+	neos := make([]neoq.Neoq, 0, ConcurrentWorkers)
+	// Create several neoq processors such that we can enqueue several jobs and have them consumed by multiple different
+	// workers. We want to make sure that a job is not processed twice in a pool of many different neoq workers.
+	for i := 0; i < ConcurrentWorkers; i++ {
+		ctx := context.Background()
+		nq, err := neoq.New(ctx,
+			neoq.WithBackend(sqlite.Backend),
+			sqlite.WithConnectionString(connString),
+			neoq.WithLogLevel(logging.LogLevelDebug),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			nq.Shutdown(ctx)
+		})
+
+		err = nq.Start(ctx, h)
+		if err != nil {
+			t.Error(err)
+		}
+
+		neos = append(neos, nq)
+	}
+
+	// From one of the neoq clients, enqueue several jobs. At least one per processor registered above.
+	nq := neos[0]
+	wg.Add(ConcurrentWorkers)
+	for i := 0; i < ConcurrentWorkers; i++ {
+		ctx := context.Background()
+		deadline := time.Now().UTC().Add(10 * time.Second)
+		jid, e := nq.Enqueue(ctx, &jobs.Job{
+			Queue: queue,
+			Payload: map[string]interface{}{
+				"message": fmt.Sprintf("hello world: %d", i),
+			},
+			Deadline: &deadline,
+		})
+		if e != nil || jid == jobs.DuplicateJobID {
+			t.Error(e)
+		}
+	}
+
+	// Wait for all jobs to complete.
+	wg.Wait()
+
+	// Make sure that we executed the expected number of jobs.
+	if atomic.LoadUint32(&execCount) != uint32(ConcurrentWorkers) {
+		t.Fatalf("mismatch number of executions. Expected: %d Found: %d", ConcurrentWorkers, execCount)
 	}
 }
 
@@ -234,7 +311,11 @@ func TestCron(t *testing.T) {
 	connString, _ := prepareAndCleanupDB(t)
 
 	ctx := context.TODO()
-	nq, err := neoq.New(ctx, neoq.WithBackend(sqlite.Backend), sqlite.WithConnectionString(connString))
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(sqlite.Backend),
+		sqlite.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelDebug),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,6 +347,67 @@ func TestCron(t *testing.T) {
 
 	if err != nil {
 		t.Error(err)
+	}
+}
+
+func TestMultipleCronNodes(t *testing.T) {
+	jobsProcessed := sync.Map{}
+	const cron = "* * * * * *"
+	connString, _ := prepareAndCleanupDB(t)
+
+	workers := make([]neoq.Neoq, ConcurrentWorkers)
+	var jobsCompleted uint32
+	var duplicateJobs uint32
+	for i := 0; i < ConcurrentWorkers; i++ {
+		ctx := context.TODO()
+		nq, err := neoq.New(ctx,
+			neoq.WithBackend(sqlite.Backend),
+			sqlite.WithConnectionString(connString),
+			neoq.WithLogLevel(logging.LogLevelDebug),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			nq.Shutdown(ctx)
+		})
+		h := handler.NewPeriodic(func(ctx context.Context) (err error) {
+			job, err := jobs.FromContext(ctx)
+			if err != nil {
+				t.Fatalf("failed to extract job details from context: %+v", err)
+				return nil
+			}
+			_, exists := jobsProcessed.LoadOrStore(job.ID, "foo")
+			if exists {
+				t.Fatalf("job (%d) has already been processed by another worker!", job.ID)
+			}
+			atomic.AddUint32(&jobsCompleted, 1)
+			return
+		})
+
+		h.WithOptions(
+			handler.JobTimeout(500*time.Millisecond),
+			handler.Concurrency(1),
+		)
+
+		err = nq.StartCron(ctx, cron, h)
+		if err != nil {
+			t.Error(err)
+		}
+
+		workers[i] = nq
+	}
+
+	const WaitForJobTime = 1100 * time.Millisecond
+
+	// allow time for listener to start and for at least one job to process
+	time.Sleep(WaitForJobTime)
+	if atomic.LoadUint32(&jobsCompleted) == 0 {
+		t.Fatalf("no jobs were completed after %v", WaitForJobTime)
+	}
+
+	if atomic.LoadUint32(&duplicateJobs) > 0 {
+		t.Fatalf("some jobs were processed more than once")
 	}
 }
 
