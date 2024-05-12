@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -153,7 +154,7 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 		return
 	}
 
-	s.logger.Debug("enqueueing job payload", slog.String("queue", job.Queue), slog.Any("job_payload", job.Payload2))
+	s.logger.Debug("enqueueing job payload", slog.String("queue", job.Queue), slog.Any("job_payload", job.Payload))
 
 	s.dbMutex.Lock()
 	defer s.dbMutex.Unlock()
@@ -456,15 +457,23 @@ func (s *SqliteBackend) updateJobToInProgress(ctx context.Context, h handler.Han
 
 func (s *SqliteBackend) getJob(ctx context.Context, jobID string) (job *jobs.Job, err error) {
 	job = &jobs.Job{}
+	var payload string
+
 	row := s.db.QueryRowContext(ctx, JobQuery, jobID)
 	err = row.Scan(
 		&job.ID, &job.Fingerprint, &job.Queue, &job.Status, &job.Deadline,
-		&job.Payload2, &job.Retries, &job.MaxRetries,
+		&payload, &job.Retries, &job.MaxRetries,
 		&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
 	)
 	if err != nil {
 		return
 	}
+
+	if err = json.Unmarshal([]byte(payload), &job.Payload); err != nil {
+		s.logger.Error("err getting job", slog.String("err", err.Error()))
+		return
+	}
+
 	return
 }
 
@@ -564,9 +573,14 @@ func (s *SqliteBackend) moveToDeadQueue(ctx context.Context, j *jobs.Job, jobErr
 		return
 	}
 
+	payload, err := json.Marshal(j.Payload)
+	if err != nil {
+		return
+	}
+
 	_, err = s.db.ExecContext(ctx, `INSERT INTO neoq_dead_jobs(queue, fingerprint, payload, retries, max_retries, error, deadline)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		j.ID, j.Queue, j.Fingerprint, j.Payload2, j.Retries, j.MaxRetries, jobErr, j.Deadline)
+		j.ID, j.Queue, j.Fingerprint, payload, j.Retries, j.MaxRetries, jobErr, j.Deadline)
 
 	return
 }
@@ -613,15 +627,22 @@ func (s *SqliteBackend) initFutureJobs(ctx context.Context, queue string) (err e
 		return
 	}
 
+	var payload string
+
 	futureJobs := []jobs.Job{}
 	for rows.Next() {
 		job := jobs.Job{}
 		err = rows.Scan(
 			&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
-			&job.Payload2, &job.Retries, &job.MaxRetries,
+			&payload, &job.Retries, &job.MaxRetries,
 			&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
 		)
 		if err != nil {
+			s.logger.Error("err getting future job's row", slog.String("err", err.Error()))
+			return
+		}
+
+		if err = json.Unmarshal([]byte(payload), &job.Payload); err != nil {
 			s.logger.Error("err getting future job's row", slog.String("err", err.Error()))
 			return
 		}
@@ -725,9 +746,15 @@ func (s *SqliteBackend) enqueueJob(ctx context.Context, tx *sql.Tx, j *jobs.Job)
 	}
 
 	s.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
+
+	payload, err := json.Marshal(j.Payload)
+	if err != nil {
+		return
+	}
+
 	err = tx.QueryRowContext(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		j.Queue, j.Fingerprint, j.Payload2, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
+		j.Queue, j.Fingerprint, payload, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
 
 	if err != nil {
 		err = fmt.Errorf("unable add job to queue: %w", err)
