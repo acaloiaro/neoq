@@ -67,6 +67,9 @@ func prepareAndCleanupDB(t *testing.T) (dbURL string, db *sql.DB) {
 	// Delete everything in the neoq_jobs table if it exists
 	_, _ = db.Exec("DELETE FROM neoq_jobs")
 
+	// Delete everything in the neoq_dead_jobs table if it exists
+	_, _ = db.Exec("DELETE FROM neoq_dead_jobs")
+
 	return dbURL, db
 }
 

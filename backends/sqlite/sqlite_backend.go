@@ -564,9 +564,9 @@ func (s *SqliteBackend) moveToDeadQueue(ctx context.Context, j *jobs.Job, jobErr
 		return
 	}
 
-	_, err = s.db.ExecContext(ctx, `INSERT INTO neoq_dead_jobs(queue, fingerprint, payload, retries, max_retries, error)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		j.Queue, j.Fingerprint, j.Payload2, j.Retries, j.MaxRetries, jobErr)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO neoq_dead_jobs(queue, fingerprint, payload, retries, max_retries, error, deadline)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		j.ID, j.Queue, j.Fingerprint, j.Payload2, j.Retries, j.MaxRetries, jobErr, j.Deadline)
 
 	return
 }
