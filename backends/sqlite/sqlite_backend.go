@@ -30,7 +30,7 @@ var sqliteMigrationsFS embed.FS
 type contextKey struct{}
 
 const (
-	JobQuery = `SELECT id,fingerprint,queue,status,payload,retries,max_retries,run_after,ran_at,created_at,error
+	JobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE id = $1
 					AND status != "processed"`
@@ -314,8 +314,6 @@ func (s *SqliteBackend) getAllPendingJobIDs(ctx context.Context, queue string) (
 // 1. handleJob first creates a transaction before which a db lock is acquired
 // 2. handleJob secondly calls the handler on the job, and finally updates the job's status
 func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error) {
-	var tx *sql.Tx
-
 	job, err := s.getJob(ctx, jobID)
 	if err != nil {
 		s.logger.Error("could not retrieve row with job id", slog.String("err", err.Error()))
@@ -327,7 +325,6 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		job.Retries++
 	}
 
-	var jobErr error
 	h, ok := s.handlers[job.Queue]
 	if !ok {
 		s.logger.Error("received a job for which no handler is configured",
@@ -338,10 +335,31 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 
 	ctx = withJobContext(ctx, job)
 
-	s.updateJobToInProgress(ctx, h, job)
+	if job.Deadline != nil && job.Deadline.Before(time.Now().UTC()) {
+		err = jobs.ErrJobExceededDeadline
+		s.logger.Debug("job deadline is in the past, skipping", slog.String("queue", job.Queue), slog.Int64("job_id", job.ID))
+
+		err = s.updateJobToFailedByDeadline(ctx, h, err, job)
+		if err != nil {
+			s.logger.Error("unable to update job status", "error", err, "job_id", job.ID)
+		}
+		return
+	}
+
+	err = s.updateJobToInProgress(ctx, h, job)
+	if err != nil {
+		return
+	}
 
 	// execute the queue handler of this job
-	jobErr = handler.Exec(ctx, h)
+	jobErr := handler.Exec(ctx, h)
+
+	err = s.updateJobAfterExecution(ctx, h, jobErr, job)
+	return
+}
+
+func (s *SqliteBackend) updateJobAfterExecution(ctx context.Context, h handler.Handler, jobErr error, job *jobs.Job) (err error) {
+	var tx *sql.Tx
 
 	s.dbMutex.Lock()
 	defer s.dbMutex.Unlock()
@@ -370,7 +388,38 @@ func (s *SqliteBackend) handleJob(ctx context.Context, jobID string) (err error)
 		return fmt.Errorf("%s %w", errMsg, err)
 	}
 
-	return nil
+	return
+}
+
+func (s *SqliteBackend) updateJobToFailedByDeadline(ctx context.Context, h handler.Handler, jobErr error, job *jobs.Job) (err error) {
+	var tx *sql.Tx
+
+	s.dbMutex.Lock()
+	defer s.dbMutex.Unlock()
+
+	tx, err = s.db.Begin()
+	if err != nil {
+		return
+	}
+
+	ctx = context.WithValue(ctx, txCtxVarKey, tx)
+
+	err = s.updateJob(ctx, jobErr, internal.JobStatusInProgress)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		err = fmt.Errorf("error updating job status: %w", err)
+		return err
+	}
+	err = tx.Commit()
+	if err != nil {
+		errMsg := "unable to commit job transaction. retrying this job may duplicate work:"
+		s.logger.Error(errMsg, slog.String("queue", h.Queue), slog.Any("error", err), slog.Int64("job_id", job.ID))
+		_ = tx.Rollback()
+		return fmt.Errorf("%s %w", errMsg, err)
+	}
+	return
 }
 
 func (s *SqliteBackend) updateJobToInProgress(ctx context.Context, h handler.Handler, job *jobs.Job) (err error) {
@@ -409,7 +458,7 @@ func (s *SqliteBackend) getJob(ctx context.Context, jobID string) (job *jobs.Job
 	job = &jobs.Job{}
 	row := s.db.QueryRowContext(ctx, JobQuery, jobID)
 	err = row.Scan(
-		&job.ID, &job.Fingerprint, &job.Queue, &job.Status,
+		&job.ID, &job.Fingerprint, &job.Queue, &job.Status, &job.Deadline,
 		&job.Payload2, &job.Retries, &job.MaxRetries,
 		&job.RunAfter, &job.RanAt, &job.CreatedAt, &job.Error,
 	)
@@ -442,6 +491,12 @@ func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
 func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error, status string) (err error) {
 	errMsg := ""
 
+	if jobErr != nil {
+		s.logger.Error("job failed", slog.Any("job_error", jobErr))
+		status = internal.JobStatusFailed
+		errMsg = jobErr.Error()
+	}
+
 	var job *jobs.Job
 	if job, err = jobs.FromContext(ctx); err != nil {
 		return fmt.Errorf("error getting job from context: %w", err)
@@ -458,18 +513,14 @@ func (s *SqliteBackend) updateJob(ctx context.Context, jobErr error, status stri
 	}
 
 	// In progress job
-	if len(status) != 0 {
+	if jobErr == nil && len(status) != 0 {
 		qstr := "UPDATE neoq_jobs SET status = $1, error = $2 WHERE id = $3"
 		_, err = tx.ExecContext(ctx, qstr, status, errMsg, job.ID)
 		return
 	}
 
-	status = internal.JobStatusProcessed
-
-	if jobErr != nil {
-		s.logger.Error("job failed", slog.Any("job_error", jobErr))
-		status = internal.JobStatusFailed
-		errMsg = jobErr.Error()
+	if jobErr == nil && len(status) == 0 {
+		status = internal.JobStatusProcessed
 	}
 
 	var runAfter time.Time
@@ -674,9 +725,9 @@ func (s *SqliteBackend) enqueueJob(ctx context.Context, tx *sql.Tx, j *jobs.Job)
 	}
 
 	s.logger.Debug("adding job to the queue", slog.String("queue", j.Queue))
-	err = tx.QueryRowContext(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
-		j.Queue, j.Fingerprint, j.Payload2, j.RunAfter).Scan(&jobID)
+	err = tx.QueryRowContext(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		j.Queue, j.Fingerprint, j.Payload2, j.RunAfter, j.Deadline, j.MaxRetries).Scan(&jobID)
 
 	if err != nil {
 		err = fmt.Errorf("unable add job to queue: %w", err)

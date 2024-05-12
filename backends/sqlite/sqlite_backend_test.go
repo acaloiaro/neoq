@@ -337,7 +337,10 @@ func TestFutureJobProcessing(t *testing.T) {
 	timeoutTimer := time.After(5 * time.Second)
 
 	ctx := context.Background()
-	nq, err := neoq.New(ctx, neoq.WithBackend(sqlite.Backend), sqlite.WithConnectionString(connString))
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(sqlite.Backend),
+		sqlite.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelError))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,5 +378,257 @@ func TestFutureJobProcessing(t *testing.T) {
 
 	if time.Now().Before(job.RunAfter) {
 		t.Error("job ran before RunAfter")
+	}
+}
+
+// TestMoveJobsToDeadQueue tests that when a job's MaxRetries is reached, the job is moved to the dead queue successfully
+func TestMoveJobsToDeadQueue(t *testing.T) {
+	connString, conn := prepareAndCleanupDB(t)
+	const queue = "testing"
+	maxRetries := 0
+	done := make(chan bool)
+	defer close(done)
+
+	timeoutTimer := time.After(5 * time.Second)
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(sqlite.Backend),
+		sqlite.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelError))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		done <- true
+		panic("no good")
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+		MaxRetries: &maxRetries,
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+	if err != nil {
+		t.Error(err)
+	}
+
+	// ensure job has fields set correctly
+	maxWait := time.Now().Add(10 * time.Second)
+	var status string
+	for {
+		if time.Now().After(maxWait) {
+			break
+		}
+
+		err = conn.
+			QueryRowContext(context.Background(), "SELECT status FROM neoq_dead_jobs WHERE id = $1", jid).
+			Scan(&status)
+
+		if err == nil {
+			break
+		}
+
+		noRows := "no rows in result set"
+		if err != nil && strings.Contains(err.Error(), noRows) {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		} else if err != nil {
+			t.Error(err)
+		}
+	}
+
+	if status != internal.JobStatusFailed {
+		t.Error("should be dead")
+	}
+}
+
+// TestBasicJobMultipleQueueWithError tests that the sqlite backend is able to process jobs on multiple queues and retries occur
+func TestBasicJobMultipleQueueWithError(t *testing.T) {
+	connString, conn := prepareAndCleanupDB(t)
+	const queue = "testing"
+	const queue2 = "testing2"
+
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(sqlite.Backend),
+		sqlite.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelError))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		return
+	})
+
+	h2 := handler.New(queue2, func(_ context.Context) (err error) {
+		panic("no good")
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = nq.Start(ctx, h2)
+	if err != nil {
+		t.Error(err)
+	}
+
+	job2Chan := make(chan string, 100)
+	go func() {
+		jid, err := nq.Enqueue(ctx, &jobs.Job{
+			Queue: queue,
+			Payload: map[string]interface{}{
+				"message": fmt.Sprintf("should not fail: %d", internal.RandInt(10000000000)),
+			},
+		})
+		if err != nil || jid == jobs.DuplicateJobID {
+			t.Error(err)
+		}
+
+		maxRetries := 1
+		jid2, err := nq.Enqueue(ctx, &jobs.Job{
+			Queue: queue2,
+			Payload: map[string]interface{}{
+				"message": fmt.Sprintf("should fail: %d", internal.RandInt(10000000000)),
+			},
+			MaxRetries: &maxRetries,
+		})
+		if err != nil || jid2 == jobs.DuplicateJobID {
+			t.Error(err)
+		}
+
+		job2Chan <- jid2
+	}()
+
+	// wait for the job to process before waiting for updates
+	jid2 := <-job2Chan
+
+	// ensure job has fields set correctly
+	maxWait := time.Now().Add(30 * time.Second)
+	var status string
+	for {
+		if time.Now().After(maxWait) {
+			break
+		}
+
+		err = conn.
+			QueryRowContext(context.Background(), "SELECT status FROM neoq_dead_jobs WHERE id = $1", jid2).
+			Scan(&status)
+
+		if err == nil {
+			break
+		}
+
+		noRows := "no rows in result set"
+		// jid2 is empty until the job gets queued
+		if jid2 == "" || err != nil && strings.Contains(err.Error(), noRows) {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		} else if err != nil {
+			t.Error(err)
+		}
+	}
+
+	if status != internal.JobStatusFailed {
+		t.Error("should be dead")
+	}
+}
+
+// TestJobWithPastDeadline ensures that when a job is scheduled and its deadline is in the past, that the job is updated
+// with an error indicating that its deadline was not met
+func TestJobWithPastDeadline(t *testing.T) {
+	connString, conn := prepareAndCleanupDB(t)
+	const queue = "testing"
+	timeoutTimer := time.After(5 * time.Second)
+	maxRetries := 5
+	done := make(chan bool)
+	defer close(done)
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(sqlite.Backend),
+		sqlite.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelError))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		return
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// deadline in the past
+	deadline := time.Now().UTC().Add(time.Duration(-5) * time.Second)
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+		Deadline:   &deadline,
+		MaxRetries: &maxRetries,
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e) // nolint: goerr113
+	}
+
+	if e != nil && !errors.Is(e, jobs.ErrJobExceededDeadline) {
+		t.Error(err) // nolint: goerr113
+	}
+
+	var status string
+	go func() {
+		// ensure job has failed/has the correct status
+		for {
+			err = conn.
+				QueryRowContext(context.Background(), "SELECT status FROM neoq_jobs WHERE id = $1", jid).
+				Scan(&status)
+			if err != nil {
+				break
+			}
+
+			if status == internal.JobStatusFailed {
+				done <- true
+				break
+			}
+
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+	if err != nil {
+		t.Errorf("job should have resulted in a status of 'failed', but its status is %s", status)
 	}
 }
