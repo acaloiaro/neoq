@@ -114,6 +114,7 @@ func TestBasicJobProcessing(t *testing.T) {
 		Deadline:   &deadline,
 		MaxRetries: &maxRetries,
 	})
+
 	if e != nil || jid == jobs.DuplicateJobID {
 		t.Error(e)
 	}
@@ -128,32 +129,30 @@ func TestBasicJobProcessing(t *testing.T) {
 	}
 
 	// ensure job has fields set correctly
-	// var jdl time.Time
-	// var jmxrt int
+	var jdl time.Time
+	var jmxrt int
 	var jqueue string
 
 	err = db.
-		// QueryRow("SELECT deadline,max_retries FROM neoq_jobs WHERE id = $1", jid).
-		// Scan(&jdl, &jmxrt)
-		QueryRow("SELECT queue FROM neoq_jobs WHERE id = $1", jid).
-		Scan(&jqueue)
+		QueryRow("SELECT queue, deadline,max_retries FROM neoq_jobs WHERE id = $1", jid).
+		Scan(&jqueue, &jdl, &jmxrt)
 	if err != nil {
 		t.Error(err)
 	}
 
-	// jdl = jdl.In(time.UTC)
-	// // dates from postgres come out with only 6 decimal places of millisecond precision, naively format dates as
-	// // strings for comparison reasons. Ref https://www.postgresql.org/docs/current/datatype-datetime.html
-	// if jdl.Format(time.RFC3339) != deadline.Format(time.RFC3339) {
-	// 	t.Error(fmt.Errorf("job deadline does not match its expected value: %v != %v", jdl, deadline)) // nolint: goerr113
-	// }
-
-	// if jmxrt != maxRetries {
-	// 	t.Error(fmt.Errorf("job MaxRetries does not match its expected value: %v != %v", jmxrt, maxRetries)) // nolint: goerr113
-	// }
-
 	if jqueue != queue {
 		t.Error(fmt.Errorf("job queue does not match its expected value: %v != %v", jqueue, queue))
+	}
+
+	jdl = jdl.In(time.UTC)
+	// dates from postgres come out with only 6 decimal places of millisecond precision, naively format dates as
+	// strings for comparison reasons. Ref https://www.postgresql.org/docs/current/datatype-datetime.html
+	if jdl.Format(time.RFC3339) != deadline.Format(time.RFC3339) {
+		t.Error(fmt.Errorf("job deadline does not match its expected value: %v != %v", jdl, deadline)) // nolint: goerr113
+	}
+
+	if jmxrt != maxRetries {
+		t.Error(fmt.Errorf("job MaxRetries does not match its expected value: %v != %v", jmxrt, maxRetries)) // nolint: goerr113
 	}
 }
 
@@ -221,6 +220,65 @@ func TestMultipleProcessors(t *testing.T) {
 	// Make sure that we executed the expected number of jobs.
 	if atomic.LoadUint32(&execCount) != uint32(ConcurrentWorkers) {
 		t.Fatalf("mismatch number of executions. Expected: %d Found: %d", ConcurrentWorkers, execCount)
+	}
+}
+
+// TestDuplicateJobRejection tests that the backend rejects jobs that are duplicates
+func TestDuplicateJobRejection(t *testing.T) {
+	const queue = "testing"
+
+	connString, _ := prepareAndCleanupDB(t)
+
+	ctx := context.TODO()
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(sqlite.Backend),
+		sqlite.WithConnectionString(connString),
+		neoq.WithLogLevel(logging.LogLevelDebug),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		return
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jid, e := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		err = e
+	}
+
+	_, e2 := nq.Enqueue(ctx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]interface{}{
+			"message": "hello world",
+		},
+	})
+	if e2 != nil || jid == jobs.DuplicateJobID {
+		err = e2
+	}
+
+	// we submitted two duplicate jobs; the error should be a duplicate job error
+	duplicateJobErr := "UNIQUE constraint failed: neoq_jobs.fingerprint"
+	if err != nil && strings.Contains(err.Error(), duplicateJobErr) {
+		return
+	} else if err != nil {
+		t.Error(err)
+	}
+
+	if err != nil {
+		t.Error(err)
 	}
 }
 
@@ -528,7 +586,7 @@ func TestFutureJobProcessing(t *testing.T) {
 
 // TestMoveJobsToDeadQueue tests that when a job's MaxRetries is reached, the job is moved to the dead queue successfully
 func TestMoveJobsToDeadQueue(t *testing.T) {
-	connString, conn := prepareAndCleanupDB(t)
+	connString, db := prepareAndCleanupDB(t)
 	const queue = "testing"
 	maxRetries := 0
 	done := make(chan bool)
@@ -584,7 +642,7 @@ func TestMoveJobsToDeadQueue(t *testing.T) {
 			break
 		}
 
-		err = conn.
+		err = db.
 			QueryRowContext(context.Background(), "SELECT status FROM neoq_dead_jobs WHERE id = $1", jid).
 			Scan(&status)
 
@@ -592,8 +650,8 @@ func TestMoveJobsToDeadQueue(t *testing.T) {
 			break
 		}
 
-		noRows := "no rows in result set"
-		if err != nil && strings.Contains(err.Error(), noRows) {
+		noRowsErr := "no rows in result set"
+		if err != nil && strings.Contains(err.Error(), noRowsErr) {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		} else if err != nil {
@@ -608,7 +666,7 @@ func TestMoveJobsToDeadQueue(t *testing.T) {
 
 // TestBasicJobMultipleQueueWithError tests that the sqlite backend is able to process jobs on multiple queues and retries occur
 func TestBasicJobMultipleQueueWithError(t *testing.T) {
-	connString, conn := prepareAndCleanupDB(t)
+	connString, db := prepareAndCleanupDB(t)
 	const queue = "testing"
 	const queue2 = "testing2"
 
@@ -678,7 +736,7 @@ func TestBasicJobMultipleQueueWithError(t *testing.T) {
 			break
 		}
 
-		err = conn.
+		err = db.
 			QueryRowContext(context.Background(), "SELECT status FROM neoq_dead_jobs WHERE id = $1", jid2).
 			Scan(&status)
 
@@ -686,9 +744,9 @@ func TestBasicJobMultipleQueueWithError(t *testing.T) {
 			break
 		}
 
-		noRows := "no rows in result set"
+		noRowsErr := "no rows in result set"
 		// jid2 is empty until the job gets queued
-		if jid2 == "" || err != nil && strings.Contains(err.Error(), noRows) {
+		if jid2 == "" || err != nil && strings.Contains(err.Error(), noRowsErr) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		} else if err != nil {
@@ -704,7 +762,7 @@ func TestBasicJobMultipleQueueWithError(t *testing.T) {
 // TestJobWithPastDeadline ensures that when a job is scheduled and its deadline is in the past, that the job is updated
 // with an error indicating that its deadline was not met
 func TestJobWithPastDeadline(t *testing.T) {
-	connString, conn := prepareAndCleanupDB(t)
+	connString, db := prepareAndCleanupDB(t)
 	const queue = "testing"
 	timeoutTimer := time.After(5 * time.Second)
 	maxRetries := 5
@@ -752,7 +810,7 @@ func TestJobWithPastDeadline(t *testing.T) {
 	go func() {
 		// ensure job has failed/has the correct status
 		for {
-			err = conn.
+			err = db.
 				QueryRowContext(context.Background(), "SELECT status FROM neoq_jobs WHERE id = $1", jid).
 				Scan(&status)
 			if err != nil {

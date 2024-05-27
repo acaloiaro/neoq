@@ -1,6 +1,6 @@
 CREATE TABLE neoq_jobs (
 	id integer primary key not null,
-    fingerprint text,
+    fingerprint text not null unique,
     queue text,
     status text default "new",
     payload text,
@@ -15,7 +15,7 @@ CREATE TABLE neoq_jobs (
 
 CREATE TABLE neoq_dead_jobs (
 	id integer primary key not null,
-    fingerprint text,
+    fingerprint text not null,
     queue text,
     status text default "failed",
     payload text,
