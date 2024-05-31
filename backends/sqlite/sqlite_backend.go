@@ -46,7 +46,6 @@ const (
 					AND status != "processed"
 					AND run_after > datetime("now")
 					ORDER BY run_after ASC`
-	shutdownJobID = "-1" // job ID announced when triggering a shutdown
 )
 
 var (
@@ -169,6 +168,7 @@ func (s *SqliteBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID strin
 	// Rollback is safe to call even if the tx is already closed, so if
 	// the tx commits successfully, this is a no-op
 	defer func(ctx context.Context) { _ = tx.Rollback() }(ctx) // rollback has no effect if the transaction has been committed
+
 	jobID, err = s.enqueueJob(ctx, tx, job)
 	if err != nil {
 		s.logger.Error("error enqueueing job", slog.String("queue", job.Queue), slog.Any("error", err))
@@ -733,7 +733,10 @@ func (s *SqliteBackend) Shutdown(ctx context.Context) {
 	}
 
 	s.cron.Stop()
+
+	s.dbMutex.Lock()
 	s.db.Close()
+	s.dbMutex.Unlock()
 
 	s.cancelFuncs = nil
 	s.logger.Debug("shutdown complete")
