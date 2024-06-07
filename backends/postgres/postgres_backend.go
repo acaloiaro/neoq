@@ -939,7 +939,7 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 		return
 	}
 
-	ctx = withJobContext(ctx, job)
+	ctx = jobs.WithJobContext(ctx, job)
 	ctx = context.WithValue(ctx, txCtxVarKey, tx)
 
 	if job.RunAfter.After(time.Now()) {
@@ -1129,11 +1129,6 @@ func (p *PgBackend) acquire(ctx context.Context) (conn *pgxpool.Conn, err error)
 		err = ErrExceededConnectionPoolTimeout
 		return
 	}
-}
-
-// withJobContext creates a new context with the Job set
-func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
-	return context.WithValue(ctx, internal.JobCtxVarKey, j)
 }
 
 func GetPQConnectionString(connectionString string) (string, error) {

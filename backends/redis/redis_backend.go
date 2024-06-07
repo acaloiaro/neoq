@@ -253,7 +253,7 @@ func (b *RedisBackend) Start(_ context.Context, h handler.Handler) (err error) {
 			RunAfter:   ti.NextProcessAt,
 		}
 
-		ctx = withJobContext(ctx, job)
+		ctx = jobs.WithJobContext(ctx, job)
 		err = handler.Exec(ctx, h)
 		if err != nil {
 			b.logger.Error("error handling job", slog.Any("error", err))
@@ -359,9 +359,4 @@ func (b *RedisBackend) SetLogger(logger logging.Logger) {
 func (b *RedisBackend) Shutdown(_ context.Context) {
 	b.client.Close()
 	b.server.Shutdown()
-}
-
-// withJobContext creates a new context with the Job set
-func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
-	return context.WithValue(ctx, internal.JobCtxVarKey, j)
 }

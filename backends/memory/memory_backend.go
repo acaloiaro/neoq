@@ -331,7 +331,7 @@ func (m *MemBackend) scheduleFutureJobs(ctx context.Context) {
 }
 
 func (m *MemBackend) handleJob(ctx context.Context, job *jobs.Job, h handler.Handler) (err error) {
-	ctx = withJobContext(ctx, job)
+	ctx = jobs.WithJobContext(ctx, job)
 
 	m.logger.Debug(
 		"handling job",
@@ -390,9 +390,4 @@ func (m *MemBackend) removeFutureJob(jobID int64) {
 		m.fingerprints.Delete(job.Fingerprint)
 		m.futureJobs.Delete(job.ID)
 	}
-}
-
-// withJobContext creates a new context with the Job set
-func withJobContext(ctx context.Context, j *jobs.Job) context.Context {
-	return context.WithValue(ctx, internal.JobCtxVarKey, j)
 }
