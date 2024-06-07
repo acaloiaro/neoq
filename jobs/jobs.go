@@ -75,6 +75,11 @@ func FingerprintJob(j *Job) (err error) {
 	return
 }
 
+// WithJobContext adds a job to the provided context
+func WithJobContext(ctx context.Context, job *Job) context.Context {
+	return context.WithValue(ctx, internal.JobCtxVarKey, job)
+}
+
 // FromContext fetches the job from a context if the job context variable is set
 func FromContext(ctx context.Context) (j *Job, err error) {
 	var ok bool
