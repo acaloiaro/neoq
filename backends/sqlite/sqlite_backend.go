@@ -108,8 +108,8 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (sb neoq.Neoq, err 
 
 // initializeDB initializes the tables, types, and indices necessary to operate Neoq
 //
-// This will consume the migration files embedded at build time and will connect to the DB using its own tooling and
-// perform the migrations. After which it will close its DB connections since they will not be needed after
+// This consumes the migration files embedded at build time and connects to the DB using its own tooling and
+// perform the migrations. After which it closes its DB connections since they will not be needed after
 // initialization.
 func (s *SqliteBackend) initializeDB() (err error) {
 	migrations, err := iofs.New(sqliteMigrationsFS, "migrations")
