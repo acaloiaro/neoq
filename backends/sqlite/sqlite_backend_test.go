@@ -44,8 +44,8 @@ func prepareAndCleanupDB(t *testing.T) (dbURL string, db *sql.DB) {
 	}
 
 	cwd, _ := os.Getwd()
-	dbURL = "sqlite3://" + cwd + "/test.db"
 	dbPath := cwd + "/test.db"
+	dbURL = "sqlite3://" + dbPath
 
 	m, err := migrate.NewWithSourceInstance("iofs", migrations, dbURL)
 	if err != nil {

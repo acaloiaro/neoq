@@ -135,7 +135,7 @@ func (s *SqliteBackend) initializeDB() (err error) {
 		return
 	}
 
-	dbPath := strings.TrimLeft(s.config.ConnectionString, "sqlite3://")
+	dbPath := strings.TrimPrefix(s.config.ConnectionString, "sqlite3://")
 	s.db, err = sql.Open("sqlite3", dbPath)
 	if err != nil {
 		s.logger.Error("unable to set db connection")
