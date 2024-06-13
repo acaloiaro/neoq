@@ -21,6 +21,7 @@ import (
 	"github.com/iancoleman/strcase"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
@@ -618,15 +619,15 @@ func (p *PgBackend) updateJob(ctx context.Context, jobErr error) (err error) {
 	status := internal.JobStatusProcessed
 	errMsg := ""
 
-	if jobErr != nil {
-		p.logger.Error("job failed", slog.Any("job_error", jobErr))
-		status = internal.JobStatusFailed
-		errMsg = jobErr.Error()
-	}
-
 	var job *jobs.Job
 	if job, err = jobs.FromContext(ctx); err != nil {
 		return fmt.Errorf("error getting job from context: %w", err)
+	}
+
+	if jobErr != nil {
+		p.logger.Error("job failed", slog.Int64("job_id", job.ID), slog.Any("job_error", jobErr))
+		status = internal.JobStatusFailed
+		errMsg = jobErr.Error()
 	}
 
 	var tx pgx.Tx
