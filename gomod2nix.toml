@@ -44,8 +44,8 @@ schema = 3
     version = "v0.0.0-20221227161230-091c0ba34f0a"
     hash = "sha256-rBtUw15WPPDp2eulHXH5e2zCIed1OPFYwlCpgDOnGRM="
   [mod."github.com/jackc/pgx/v5"]
-    version = "v5.5.4"
-    hash = "sha256-T4nYUbDDiyN7v6BRhEkPJ9slatzUMrEyoGAyjfK9syI="
+    version = "v5.6.0"
+    hash = "sha256-6Tx7UF6gWc4e572x6wBDLghoe0Inhef0cH2Fq5I8fX4="
   [mod."github.com/jackc/puddle/v2"]
     version = "v2.2.1"
     hash = "sha256-Edf8SLT/8l+xfHm9IjUGxs1MHtic2VgRyfqb6OzGA9k="
