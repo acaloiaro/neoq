@@ -10,9 +10,10 @@ import (
 type contextKey struct{}
 
 const (
-	JobStatusNew       = "new"
-	JobStatusProcessed = "processed"
-	JobStatusFailed    = "failed"
+	JobStatusNew        = "new"
+	JobStatusInProgress = "in progress"
+	JobStatusProcessed  = "processed"
+	JobStatusFailed     = "failed"
 )
 
 var JobCtxVarKey contextKey
