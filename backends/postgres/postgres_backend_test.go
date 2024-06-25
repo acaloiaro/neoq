@@ -568,12 +568,11 @@ func Test_MoveJobsToDeadQueue(t *testing.T) {
 			break
 		}
 
-		if err != nil && errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			time.Sleep(50 * time.Millisecond)
 			continue
-		} else if err != nil {
-			t.Error(err)
 		}
+		t.Error(err)
 	}
 
 	if status != internal.JobStatusFailed {
