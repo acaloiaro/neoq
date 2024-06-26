@@ -943,7 +943,7 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 	ctx = jobs.WithJobContext(ctx, job)
 	ctx = context.WithValue(ctx, txCtxVarKey, tx)
 
-	if job.RunAfter.After(time.Now()) {
+	if job.RunAfter.Before(time.Now()) {
 		p.logger.Error("Running a job too early.",
 			slog.String("queue", job.Queue),
 			slog.Int64("job_id", job.ID),
