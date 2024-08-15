@@ -95,5 +95,5 @@ schema = 3
     version = "v0.0.0-20190308202827-9d24e82272b4"
     hash = "sha256-azbksMSLQf1CK0jF2i+ESjFenMDR88xRW1tov0metrg="
   [mod."google.golang.org/protobuf"]
-    version = "v1.28.1"
-    hash = "sha256-sTJYgvlv5is7vHNxcuigF2lNASp0QonhUgnrguhfHSU="
+    version = "v1.33.0"
+    hash = "sha256-cWwQjtUwSIEkAlAadrlxK1PYZXTRrV4NKzt7xDpJgIU="
