@@ -462,7 +462,7 @@ func TestHandlerRecoveryCallback(t *testing.T) {
 		neoq.WithLogLevel(logging.LogLevelDebug),
 		WithAddr(connString),
 		WithPassword(password),
-		neoq.WithRecoveryCallback(func(ctx context.Context, _ error) (err error) {
+		neoq.WithRecoveryCallback(func(ctx context.Context, _ error, _ string) (err error) {
 			recoveryFuncCalled <- true
 			return
 		}),

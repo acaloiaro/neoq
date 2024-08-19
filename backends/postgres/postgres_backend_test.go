@@ -1086,7 +1086,7 @@ func TestHandlerRecoveryCallback(t *testing.T) {
 	nq, err := neoq.New(ctx,
 		neoq.WithBackend(postgres.Backend),
 		postgres.WithConnectionString(connString),
-		neoq.WithRecoveryCallback(func(ctx context.Context, _ error) (err error) {
+		neoq.WithRecoveryCallback(func(ctx context.Context, _ error, _ string) (err error) {
 			recoveryFuncCalled <- true
 			return
 		}))
