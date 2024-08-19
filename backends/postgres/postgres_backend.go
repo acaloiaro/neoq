@@ -26,6 +26,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 	"github.com/robfig/cron"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	api "go.opentelemetry.io/otel/metric"
 	"golang.org/x/exp/slices"
 	"golang.org/x/exp/slog"
 )
@@ -96,6 +99,9 @@ type PgBackend struct {
 	logger         logging.Logger             // backend-wide logger
 	mu             *sync.RWMutex              // protects concurrent access to fields on PgBackend
 	pool           *pgxpool.Pool              // connection pool for backend, used to process and enqueue jobs
+	successGauage  metric.Int64Counter        // opentelemetry gauge for successful jobs
+	failureGauge   metric.Int64Counter        // opentelemetry gauge for failed jobs
+	depthGauge     metric.Int64Gauge          // opentelemetry gauge for queue depth
 }
 
 // Backend initializes a new postgres-backed neoq backend
@@ -184,6 +190,26 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 		p.pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
 			return nil, fmt.Errorf("unable to create worker connection pool: %w", err)
+		}
+	}
+
+	// initialize otel meters for observability
+	if p.config.OpentelemetryMeterProvider != nil {
+		m := p.config.OpentelemetryMeterProvider.Meter("github.com/acaloiaro/neoq")
+		p.successGauage, err = m.Int64Counter("neoq.queue.success", api.WithDescription("jobs that have succeeded"))
+		if err != nil {
+			p.logger.Error("unable to initialize opentelemetry success metrics", slog.Any("error", err))
+			return nil, fmt.Errorf("unable to initialize opentelemetry success metrics: %w", err)
+		}
+		p.failureGauge, err = m.Int64Counter("neoq.queue.failure", api.WithDescription("jobs that have failed"))
+		if err != nil {
+			p.logger.Error("unable to initialize opentelemetry failure metrics", slog.Any("error", err))
+			return nil, fmt.Errorf("unable to initialize opentelemetry failure metrics: %w", err)
+		}
+		p.depthGauge, err = m.Int64Gauge("neoq.queue.depth", api.WithDescription("depth of the queue"))
+		if err != nil {
+			p.logger.Error("unable to initialize opentelemetry queue depth metrics", slog.Any("error", err))
+			return nil, fmt.Errorf("unable to initialize opentelemetry queue depth: %w", err)
 		}
 	}
 
@@ -868,12 +894,31 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 // nolint: cyclop
 func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 	var job *jobs.Job
+	var jobErr error
 	var tx pgx.Tx
 	conn, err := p.acquire(ctx)
 	if err != nil {
 		return
 	}
-	defer conn.Release()
+
+	defer func() {
+		conn.Release()
+		if job == nil {
+			return
+		}
+
+		telemetryAttrs := api.WithAttributes(
+			attribute.Key("queue").String(job.Queue),
+		)
+		// the job ended with an error, incrementing the failing counter
+		if jobErr != nil && p.failureGauge != nil {
+			p.failureGauge.Add(ctx, 1, telemetryAttrs)
+		}
+		// the job ended in success, increment success metrics
+		if jobErr == nil && p.successGauage != nil {
+			p.successGauage.Add(ctx, 1, telemetryAttrs)
+		}
+	}()
 
 	tx, err = conn.Begin(ctx)
 	if err != nil {
@@ -912,7 +957,6 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 		job.Retries++
 	}
 
-	var jobErr error
 	h, ok := p.handlers[job.Queue]
 	if !ok {
 		p.logger.Error("received a job for which no handler is configured",

@@ -8,9 +8,11 @@ import (
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
+	"go.opentelemetry.io/otel/sdk/metric"
 )
 
 const (
+	Name                 = "neoq"
 	DefaultIdleTxTimeout = 30000
 	// the window of time between time.Now() and when a job's RunAfter comes due that neoq will schedule a goroutine to
 	// schdule the job for execution.
@@ -28,18 +30,19 @@ var ErrBackendNotSpecified = errors.New("a backend must be specified")
 // backends. [BackendConcurrency], for example, is only used by the redis backend. Other backends manage concurrency on a
 // per-handler basis.
 type Config struct {
-	BackendInitializer     BackendInitializer
-	BackendAuthPassword    string                   // password with which to authenticate to the backend
-	BackendConcurrency     int                      // total number of backend processes available to process jobs
-	ConnectionString       string                   // a string containing connection details for the backend
-	JobCheckInterval       time.Duration            // the interval of time between checking for new future/retry jobs
-	FutureJobWindow        time.Duration            // time duration between current time and job.RunAfter that future jobs get scheduled
-	IdleTransactionTimeout int                      // number of milliseconds PgBackend transaction may idle before the connection is killed
-	ShutdownTimeout        time.Duration            // duration to wait for jobs to finish during shutdown
-	SynchronousCommit      bool                     // Postgres: Enable synchronous commits (increases durability, decreases performance)
-	LogLevel               logging.LogLevel         // the log level of the default logger
-	PGConnectionTimeout    time.Duration            // the amount of time to wait for a connection to become available before timing out
-	RecoveryCallback       handler.RecoveryCallback // the recovery handler applied to all Handlers excuted by the associated Neoq instance
+	BackendInitializer         BackendInitializer
+	BackendAuthPassword        string                   // password with which to authenticate to the backend
+	BackendConcurrency         int                      // total number of backend processes available to process jobs
+	ConnectionString           string                   // a string containing connection details for the backend
+	JobCheckInterval           time.Duration            // the interval of time between checking for new future/retry jobs
+	FutureJobWindow            time.Duration            // time duration between current time and job.RunAfter that future jobs get scheduled
+	IdleTransactionTimeout     int                      // number of milliseconds PgBackend transaction may idle before the connection is killed
+	ShutdownTimeout            time.Duration            // duration to wait for jobs to finish during shutdown
+	SynchronousCommit          bool                     // Postgres: Enable synchronous commits (increases durability, decreases performance)
+	LogLevel                   logging.LogLevel         // the log level of the default logger
+	PGConnectionTimeout        time.Duration            // the amount of time to wait for a connection to become available before timing out
+	RecoveryCallback           handler.RecoveryCallback // the recovery handler applied to all Handlers excuted by the associated Neoq instance
+	OpentelemetryMeterProvider *metric.MeterProvider
 }
 
 // ConfigOption is a function that sets optional backend configuration
@@ -140,5 +143,16 @@ func WithJobCheckInterval(interval time.Duration) ConfigOption {
 func WithLogLevel(level logging.LogLevel) ConfigOption {
 	return func(c *Config) {
 		c.LogLevel = level
+	}
+}
+
+// WithOpenTelemetry configures neoq to report metrics to the given opentelemetry provider
+//
+// Neoq provides two [config.BackendInitializer] that may be used with WithBackend
+//   - [pkg/github.com/acaloiaro/neoq/backends/memory.Backend]
+//   - [pkg/github.com/acaloiaro/neoq/backends/postgres.Backend]
+func WithOpenTelmetry(provider *metric.MeterProvider) ConfigOption {
+	return func(c *Config) {
+		c.OpentelemetryMeterProvider = provider
 	}
 }
