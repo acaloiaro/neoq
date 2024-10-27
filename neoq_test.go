@@ -253,7 +253,7 @@ func TestHandlerRecoveryCallback(t *testing.T) {
 	ctx := context.Background()
 	nq, err := neoq.New(ctx,
 		neoq.WithBackend(memory.Backend),
-		neoq.WithRecoveryCallback(func(_ context.Context, _ error) (err error) {
+		neoq.WithRecoveryCallback(func(_ context.Context, _ error, _ string) (err error) {
 			recoveryFuncCalled <- true
 			return
 		}))

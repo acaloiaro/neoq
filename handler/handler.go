@@ -26,11 +26,11 @@ var (
 type Func func(ctx context.Context) error
 
 // RecoveryCallback is a function to be called when fatal errors/panics occur in Handlers
-type RecoveryCallback func(ctx context.Context, err error) (erro error)
+type RecoveryCallback func(ctx context.Context, err error, stackTrace string) (erro error)
 
 // DefaultRecoveryCallback is the function that gets called by default when handlers panic
-func DefaultRecoveryCallback(_ context.Context, _ error) (err error) {
-	slog.Error("recovering from a panic in the job handler", slog.Any("stack", string(debug.Stack())))
+func DefaultRecoveryCallback(_ context.Context, recoveredError error, stack string) (err error) {
+	slog.Error("recovering from a panic in the job handler", slog.Any("error", recoveredError), slog.Any("stack", stack))
 	return nil
 }
 
@@ -154,7 +154,7 @@ func Exec(ctx context.Context, handler Handler) (err error) {
 				err = errorFromPanic(x)
 				errCh <- err
 				if handler.RecoverCallback != nil {
-					err = handler.RecoverCallback(ctx, err)
+					err = handler.RecoverCallback(ctx, err, string(debug.Stack()))
 					if err != nil {
 						slog.Error("handler recovery callback also failed while recovering from panic", slog.Any("error", err))
 					}

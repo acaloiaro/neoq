@@ -26,6 +26,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 	"github.com/robfig/cron"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/exp/slices"
 	"golang.org/x/exp/slog"
 )
@@ -50,6 +52,11 @@ const (
 					AND run_after <= NOW()
 					FOR UPDATE SKIP LOCKED
 					LIMIT 1`
+	PendingJobCountQuery = `SELECT COUNT(*)
+					FROM neoq_jobs
+					WHERE queue = $1
+					AND status NOT IN ('processed')
+					AND run_after <= NOW()`
 	FutureJobQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE queue = $1
@@ -96,6 +103,7 @@ type PgBackend struct {
 	logger         logging.Logger             // backend-wide logger
 	mu             *sync.RWMutex              // protects concurrent access to fields on PgBackend
 	pool           *pgxpool.Pool              // connection pool for backend, used to process and enqueue jobs
+	metricPack     neoq.MetricPack            // a collection opentelemetry counters and gauges for telemetry reporting
 }
 
 // Backend initializes a new postgres-backed neoq backend
@@ -139,6 +147,7 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 		mu:             &sync.RWMutex{},
 		listenCancelCh: make(chan context.CancelFunc, 1),
 		listenConnDown: make(chan bool),
+		metricPack:     neoq.MetricPack{},
 	}
 
 	// Set all options
@@ -184,6 +193,14 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 		p.pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
 			return nil, fmt.Errorf("unable to create worker connection pool: %w", err)
+		}
+	}
+
+	// initialize otel meters for observability
+	if p.config.OpentelemetryMeterProvider != nil {
+		err = p.metricPack.Initialize(p.config.OpentelemetryMeterProvider)
+		if err != nil {
+			p.logger.Error("unable to initialize open telemetry metrics", slog.Any("error", err))
 		}
 	}
 
@@ -456,6 +473,12 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 			slog.String("job_id", jobID),
 			slog.Time("run_after", job.RunAfter),
 		)
+	}
+
+	if p.metricPack.DepthCounter != nil {
+		p.metricPack.DepthCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.Key("queue").String(job.Queue),
+		))
 	}
 
 	return jobID, nil
@@ -836,6 +859,20 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 		return
 	}
 
+	pendingCount, err := p.countPendingJobs(ctx, conn, queue)
+	if err != nil {
+		p.logger.Error("failed to count pending jobs",
+			slog.String("queue", queue),
+			slog.Any("error", err),
+		)
+	}
+	p.logger.Debug("pending jobs", slog.Int64("count", pendingCount), slog.String("queue", queue))
+	if p.metricPack.DepthCounter != nil {
+		p.metricPack.DepthCounter.Add(ctx, pendingCount, metric.WithAttributes(
+			attribute.Key("queue").String(queue),
+		))
+	}
+
 	go func(ctx context.Context) {
 		defer conn.Release()
 
@@ -868,12 +905,31 @@ func (p *PgBackend) pendingJobs(ctx context.Context, queue string) (jobsCh chan 
 // nolint: cyclop
 func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 	var job *jobs.Job
+	var jobErr error
 	var tx pgx.Tx
 	conn, err := p.acquire(ctx)
 	if err != nil {
 		return
 	}
-	defer conn.Release()
+
+	defer func() {
+		conn.Release()
+		if job == nil {
+			return
+		}
+
+		telemetryAttrs := metric.WithAttributes(
+			attribute.Key("queue").String(job.Queue),
+		)
+		// the job ended with an error, incrementing the failing counter
+		if jobErr != nil && p.metricPack.FailureCounter != nil {
+			p.metricPack.DepthCounter.Add(ctx, 1, telemetryAttrs)
+		}
+		// the job ended in success, increment success metrics
+		if jobErr == nil && p.metricPack.SuccessCounter != nil {
+			p.metricPack.SuccessCounter.Add(ctx, 1, telemetryAttrs)
+		}
+	}()
 
 	tx, err = conn.Begin(ctx)
 	if err != nil {
@@ -912,7 +968,6 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 		job.Retries++
 	}
 
-	var jobErr error
 	h, ok := p.handlers[job.Queue]
 	if !ok {
 		p.logger.Error("received a job for which no handler is configured",
@@ -1032,6 +1087,11 @@ func (p *PgBackend) getJob(ctx context.Context, tx pgx.Tx, jobID string) (job *j
 
 func (p *PgBackend) getPendingJobID(ctx context.Context, conn *pgxpool.Conn, queue string) (jobID string, err error) {
 	err = conn.QueryRow(ctx, PendingJobIDQuery, queue).Scan(&jobID)
+	return
+}
+
+func (p *PgBackend) countPendingJobs(ctx context.Context, conn *pgxpool.Conn, queue string) (count int64, err error) {
+	err = conn.QueryRow(ctx, PendingJobCountQuery, queue).Scan(&count)
 	return
 }
 
