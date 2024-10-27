@@ -28,7 +28,6 @@ import (
 	"github.com/robfig/cron"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	api "go.opentelemetry.io/otel/metric"
 	"golang.org/x/exp/slices"
 	"golang.org/x/exp/slog"
 )
@@ -196,17 +195,17 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 	// initialize otel meters for observability
 	if p.config.OpentelemetryMeterProvider != nil {
 		m := p.config.OpentelemetryMeterProvider.Meter("github.com/acaloiaro/neoq")
-		p.successGauage, err = m.Int64Counter("neoq.queue.success", api.WithDescription("jobs that have succeeded"))
+		p.successGauage, err = m.Int64Counter("neoq.queue.success", metric.WithDescription("jobs that have succeeded"))
 		if err != nil {
 			p.logger.Error("unable to initialize opentelemetry success metrics", slog.Any("error", err))
 			return nil, fmt.Errorf("unable to initialize opentelemetry success metrics: %w", err)
 		}
-		p.failureGauge, err = m.Int64Counter("neoq.queue.failure", api.WithDescription("jobs that have failed"))
+		p.failureGauge, err = m.Int64Counter("neoq.queue.failure", metric.WithDescription("jobs that have failed"))
 		if err != nil {
 			p.logger.Error("unable to initialize opentelemetry failure metrics", slog.Any("error", err))
 			return nil, fmt.Errorf("unable to initialize opentelemetry failure metrics: %w", err)
 		}
-		p.depthGauge, err = m.Int64Gauge("neoq.queue.depth", api.WithDescription("depth of the queue"))
+		p.depthGauge, err = m.Int64Gauge("neoq.queue.depth", metric.WithDescription("depth of the queue"))
 		if err != nil {
 			p.logger.Error("unable to initialize opentelemetry queue depth metrics", slog.Any("error", err))
 			return nil, fmt.Errorf("unable to initialize opentelemetry queue depth: %w", err)
@@ -907,7 +906,7 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 			return
 		}
 
-		telemetryAttrs := api.WithAttributes(
+		telemetryAttrs := metric.WithAttributes(
 			attribute.Key("queue").String(job.Queue),
 		)
 		// the job ended with an error, incrementing the failing counter
