@@ -3,11 +3,13 @@ package neoq
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/jobs"
 	"github.com/acaloiaro/neoq/logging"
+	otel "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/sdk/metric"
 )
 
@@ -43,6 +45,32 @@ type Config struct {
 	PGConnectionTimeout        time.Duration            // the amount of time to wait for a connection to become available before timing out
 	RecoveryCallback           handler.RecoveryCallback // the recovery handler applied to all Handlers excuted by the associated Neoq instance
 	OpentelemetryMeterProvider *metric.MeterProvider
+}
+
+// MetricPack is a collection of opentelemetry counters/gauges for telemetry reporting
+type MetricPack struct {
+	SuccessCounter otel.Int64Counter // opentelemetry successful job counter
+	FailureCounter otel.Int64Counter // opentelemetry failed job counter
+	DepthCounter   otel.Int64Counter // opentelemetry queue depth counter
+}
+
+// Initialize initializes all meters and gauages
+func (m *MetricPack) Initialize(mp *metric.MeterProvider) (err error) {
+	meter := mp.Meter("github.com/acaloiaro/neoq")
+	m.SuccessCounter, err = meter.Int64Counter("neoq.queue.success", otel.WithDescription("successful jobs"))
+	if err != nil {
+		return fmt.Errorf("unable to initialize opentelemetry success metrics: %w", err)
+	}
+	m.FailureCounter, err = meter.Int64Counter("neoq.queue.failure", otel.WithDescription("failed jobs"))
+	if err != nil {
+		return fmt.Errorf("unable to initialize opentelemetry failure metrics: %w", err)
+	}
+	m.DepthCounter, err = meter.Int64Counter("neoq.queue.depth", otel.WithDescription("queue depth"))
+	if err != nil {
+		return fmt.Errorf("unable to initialize opentelemetry queue depth: %w", err)
+	}
+
+	return
 }
 
 // ConfigOption is a function that sets optional backend configuration
@@ -151,7 +179,7 @@ func WithLogLevel(level logging.LogLevel) ConfigOption {
 // Neoq provides two [config.BackendInitializer] that may be used with WithBackend
 //   - [pkg/github.com/acaloiaro/neoq/backends/memory.Backend]
 //   - [pkg/github.com/acaloiaro/neoq/backends/postgres.Backend]
-func WithOpenTelmetry(provider *metric.MeterProvider) ConfigOption {
+func WithOpenTelemetry(provider *metric.MeterProvider) ConfigOption {
 	return func(c *Config) {
 		c.OpentelemetryMeterProvider = provider
 	}
