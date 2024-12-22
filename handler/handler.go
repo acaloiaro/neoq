@@ -14,6 +14,7 @@ import (
 
 const (
 	DefaultHandlerTimeout = 30 * time.Second
+	DefaultConcurrency    = 50 // goroutines available to do work
 )
 
 var (
@@ -64,7 +65,8 @@ func JobTimeout(d time.Duration) Option {
 }
 
 // Concurrency configures Neoq handlers to process jobs concurrently
-// the default concurrency is the number of (v)CPUs on the machine running Neoq
+//
+// Default concurrency is defined by [DefaultConcurency]
 func Concurrency(c int) Option {
 	return func(h *Handler) {
 		h.Concurrency = c
@@ -103,9 +105,8 @@ func New(queue string, f Func, opts ...Option) (h Handler) {
 
 	h.WithOptions(opts...)
 
-	// default to running on as many goroutines as there are CPUs
 	if h.Concurrency == 0 {
-		Concurrency(runtime.NumCPU())(&h)
+		Concurrency(DefaultConcurrency)(&h)
 	}
 
 	// always set a job timeout if none is set
