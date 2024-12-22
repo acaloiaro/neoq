@@ -17,21 +17,11 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
       - name: Bump version and push tag 
-        shell: bash
-        run: |
-          git config --global user.email "actions@github.com"
-          git config --global user.name "Github Actions"
-          go install github.com/caarlos0/svu@latest
-          OLD_TAG=$(svu current --strip-prefix)
-          NEW_TAG=$(svu next --strip-prefix)
-          [ "$OLD_TAG" == "$NEW_TAG" ] && echo "no version bump" && exit 0
-          git commit -m "bump release version" --allow-empty
-          git tag v$NEW_TAG
-          git tag $NEW_TAG
-          git push 
-          git push --tags
+        uses: charlesthomas/github-action-svu@v1.0.6+2.2.0
+        with:
+          pushTag: true 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v4
         with:
