@@ -32,7 +32,7 @@ type Config struct {
 	BackendAuthPassword    string                   // password with which to authenticate to the backend
 	BackendConcurrency     int                      // total number of backend processes available to process jobs
 	ConnectionString       string                   // a string containing connection details for the backend
-	JobCheckInterval       time.Duration            // the interval of time between checking for new future/retry jobs
+	JobCheckInterval       time.Duration            // the interval of time between checking for new future/past-due jobs
 	FutureJobWindow        time.Duration            // time duration between current time and job.RunAfter that future jobs get scheduled
 	IdleTransactionTimeout int                      // number of milliseconds PgBackend transaction may idle before the connection is killed
 	ShutdownTimeout        time.Duration            // duration to wait for jobs to finish during shutdown

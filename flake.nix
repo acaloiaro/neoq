@@ -31,6 +31,7 @@
           {
             packages = with pkgs; [
               automake
+              gcc
               go_1_21
               gomod2nix.legacyPackages.${system}.gomod2nix
               gotools
@@ -41,7 +42,7 @@
             ];
 
             enterShell = ''
-              export TEST_DATABASE_URL="postgres://postgres:postgres@localhost:${toString postgresPort}/neoq?sslmode=disable&pool_max_conns=100"
+              export TEST_DATABASE_URL="postgres://postgres:postgres@localhost:${toString postgresPort}/neoq?sslmode=disable&pool_max_conns=250"
               export TEST_REDIS_URL=localhost:${toString redisPort}
               export REDIS_PASSWORD=
             '';
@@ -64,6 +65,10 @@
                   CREATE USER postgres WITH PASSWORD 'postgres' SUPERUSER;
                   CREATE DATABASE neoq;
                 '';
+                settings = {
+                  max_connections = 250;
+                  log_statement = "all";
+                };
               };
 
               redis = {
