@@ -1144,7 +1144,7 @@ func TestProcessPendingJobs(t *testing.T) {
 
 	ctx := context.Background()
 
-	// INSERTing jobs into the the job queue before noeq is listening on any queues ensures that the new job is not announced, and when
+	// INSERTing jobs into the job queue before noeq is listening on any queues ensures that the new job is not announced, and when
 	// neoq _is_ started, that there is a pending jobs waiting to be processed
 	payload := map[string]interface{}{
 		"message": "hello world",
@@ -1154,7 +1154,7 @@ func TestProcessPendingJobs(t *testing.T) {
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		queue, "dummy", payload, time.Now().UTC(), nil, 1).Scan(&pendingJobID)
 	if err != nil {
-		err = fmt.Errorf("unable to add job to queue: %w", err)
+		t.Error(fmt.Errorf("unable to add job to queue: %w", err))
 		return
 	}
 
@@ -1174,8 +1174,9 @@ func TestProcessPendingJobs(t *testing.T) {
 		t.Error(err)
 	}
 
-	var status string
 	go func() {
+		var err error
+		var status string
 		// ensure job has failed/has the correct status
 		for {
 			err = conn.
@@ -1200,6 +1201,6 @@ func TestProcessPendingJobs(t *testing.T) {
 	case <-done:
 	}
 	if err != nil {
-		t.Errorf("job should have resulted in a status of 'processed', but its status is %s", status)
+		t.Errorf("job should have resulted in a status of 'processed', but did not")
 	}
 }

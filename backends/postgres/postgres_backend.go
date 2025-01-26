@@ -191,11 +191,7 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 	go p.listenerManager(ctx)
 
 	// monitor queues for pending jobs, so neoq is resilient to LISTEN disconnects and reconnections
-	pendingJobsConn, err := p.pool.Acquire(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get a database connection: %w", err)
-	}
-	p.processPendingJobs(ctx, pendingJobsConn)
+	p.processPendingJobs(ctx)
 
 	p.listenConnDown <- true
 
@@ -547,7 +543,17 @@ func (p *PgBackend) StartCron(ctx context.Context, cronSpec string, h handler.Ha
 
 // SetLogger sets this backend's logger
 func (p *PgBackend) SetLogger(logger logging.Logger) {
+	p.mu.Lock()
 	p.logger = logger
+	p.mu.Unlock()
+}
+
+// Logger gets this backend's logger
+func (p *PgBackend) Logger() (l logging.Logger) {
+	p.mu.Lock()
+	l = p.logger
+	p.mu.Unlock()
+	return
 }
 
 // Shutdown shuts this backend down
@@ -831,20 +837,29 @@ func (p *PgBackend) announceJob(ctx context.Context, queue, jobID string) {
 //
 // Past due jobs are fetched on the interval [neoq.DefaultPendingJobFetchInterval]
 // nolint: cyclop
-func (p *PgBackend) processPendingJobs(ctx context.Context, conn *pgxpool.Conn) {
+func (p *PgBackend) processPendingJobs(ctx context.Context) {
 	go func(ctx context.Context) {
-		defer conn.Release()
+		var err error
+		var conn *pgxpool.Conn
+		var pendingJobs []*jobs.Job
 		ticker := time.NewTicker(neoq.DefaultPendingJobFetchInterval)
 
 		// check for pending jobs on an interval until the context is canceled
 		for {
-			pendingJobs, err := p.getPendingJobs(ctx, conn)
+			conn, err = p.acquire(ctx)
+			if err != nil {
+				p.Logger().Error("[pending_jobs] unable to get database connection", slog.Any("error", err))
+				<-ticker.C
+				continue
+			}
+
+			pendingJobs, err = p.getPendingJobs(ctx, conn)
+			conn.Release()
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				p.logger.Error(
+				p.Logger().Error(
 					"failed to fetch pending jobs",
 					slog.Any("error", err),
 				)
@@ -1049,7 +1064,7 @@ func (p *PgBackend) acquire(ctx context.Context) (conn *pgxpool.Conn, err error)
 	ctx, cancelFunc := context.WithDeadline(ctx, time.Now().Add(p.config.PGConnectionTimeout))
 	defer cancelFunc()
 
-	p.logger.Debug("acquiring connection with timeout", slog.Any("timeout", p.config.PGConnectionTimeout))
+	p.Logger().Debug("acquiring connection with timeout", slog.Any("timeout", p.config.PGConnectionTimeout))
 
 	connCh := make(chan *pgxpool.Conn)
 	errCh := make(chan error)
@@ -1069,7 +1084,7 @@ func (p *PgBackend) acquire(ctx context.Context) (conn *pgxpool.Conn, err error)
 	case err := <-errCh:
 		return nil, err
 	case <-ctx.Done():
-		p.logger.Error("exceeded timeout acquiring a connection from the pool", slog.Any("timeout", p.config.PGConnectionTimeout))
+		p.Logger().Error("exceeded timeout acquiring a connection from the pool", slog.Any("timeout", p.config.PGConnectionTimeout))
 		cancelFunc()
 		err = ErrExceededConnectionPoolTimeout
 		return
