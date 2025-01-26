@@ -1132,3 +1132,74 @@ func TestHandlerRecoveryCallback(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestProcessPendingJobs tests that unanounced jobs with a run_after before the current timestamp get run periodically
+// This ensures that when LISTENER connections fails, that jobs that would have been announced still get processed eventually
+func TestProcessPendingJobs(t *testing.T) {
+	connString, conn := prepareAndCleanupDB(t)
+	const queue = "testing"
+	timeoutTimer := time.After(5 * time.Second)
+	done := make(chan bool)
+	defer close(done)
+
+	ctx := context.Background()
+
+	// INSERTing jobs into the the job queue before noeq is listening on any queues ensures that the new job is not announced, and when
+	// neoq _is_ started, that there is a pending jobs waiting to be processed
+	payload := map[string]interface{}{
+		"message": "hello world",
+	}
+	var pendingJobID string
+	err := conn.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		queue, "dummy", payload, time.Now().UTC(), nil, 1).Scan(&pendingJobID)
+	if err != nil {
+		err = fmt.Errorf("unable to add job to queue: %w", err)
+		return
+	}
+
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		return
+	})
+
+	// Start ensures that pending jobs will be processed
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	var status string
+	go func() {
+		// ensure job has failed/has the correct status
+		for {
+			err = conn.
+				QueryRow(context.Background(), "SELECT status FROM neoq_jobs WHERE id = $1", pendingJobID).
+				Scan(&status)
+			if err != nil {
+				break
+			}
+
+			if status != internal.JobStatusNew {
+				done <- true
+				break
+			}
+
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+	if err != nil {
+		t.Errorf("job should have resulted in a status of 'processed', but its status is %s", status)
+	}
+}
