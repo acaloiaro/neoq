@@ -43,10 +43,9 @@ const (
 					AND status NOT IN ('processed')
 					FOR UPDATE SKIP LOCKED
 					LIMIT 1`
-	PendingJobIDsQuery = `SELECT id
+	PendingJobsQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
-					WHERE queue = $1
-					AND status NOT IN ('processed')
+					WHERE status NOT IN ('processed')
 					AND run_after <= NOW()
 					ORDER BY created_at ASC
 					FOR UPDATE SKIP LOCKED
@@ -191,6 +190,13 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 	// monitor handlers for changes and LISTEN when new queues are added
 	go p.listenerManager(ctx)
 
+	// monitor queues for pending jobs, so neoq is resilient to LISTEN disconnects and reconnections
+	pendingJobsConn, err := p.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("unable to get a database connection: %w", err)
+	}
+	p.processPendingJobs(ctx, pendingJobsConn)
+
 	p.listenConnDown <- true
 
 	p.cron.Start()
@@ -200,7 +206,8 @@ func Backend(ctx context.Context, opts ...neoq.ConfigOption) (pb neoq.Neoq, err 
 	return pb, nil
 }
 
-// listenerManager manages the LISTENer connection and adding queue to it
+// listenerManager manages the LISTENer connection and add queues to it
+// nolint: cyclop
 func (p *PgBackend) listenerManager(ctx context.Context) {
 	var err error
 	for {
@@ -675,7 +682,6 @@ func (p *PgBackend) start(ctx context.Context, h handler.Handler) (err error) {
 		return fmt.Errorf("%w: %s", handler.ErrNoHandlerForQueue, h.Queue)
 	}
 
-	pendingJobsChan := p.processPendingJobs(ctx, h.Queue)
 	// wait for the listener to connect and be ready to listen
 	for q := range p.readyQueues {
 		if q == h.Queue {
@@ -699,8 +705,6 @@ func (p *PgBackend) start(ctx context.Context, h handler.Handler) (err error) {
 			for {
 				select {
 				case n = <-listenJobChan:
-					err = p.handleJob(ctx, n.Payload)
-				case n = <-pendingJobsChan:
 					err = p.handleJob(ctx, n.Payload)
 				case <-ctx.Done():
 					return
@@ -825,40 +829,29 @@ func (p *PgBackend) announceJob(ctx context.Context, queue, jobID string) {
 
 // processPendingJobs starts a goroutine that periodically fetches pendings jobs and announces them to workers.
 //
-// Past due jobs are fetched on the interval [neoq.Config.JobCheckInterval]
+// Past due jobs are fetched on the interval [neoq.DefaultPendingJobFetchInterval]
 // nolint: cyclop
-func (p *PgBackend) processPendingJobs(ctx context.Context, queue string) (jobsCh chan *pgconn.Notification) {
-	conn, err := p.acquire(ctx)
-	if err != nil {
-		p.logger.Error(
-			"failed to acquire database connection to listen for pending queue items",
-			slog.String("queue", queue),
-			slog.Any("error", err),
-		)
-		return
-	}
-
-	// check for new past-due jobs on an interval
-	ticker := time.NewTicker(p.config.JobCheckInterval)
+func (p *PgBackend) processPendingJobs(ctx context.Context, conn *pgxpool.Conn) {
 	go func(ctx context.Context) {
 		defer conn.Release()
+		ticker := time.NewTicker(neoq.DefaultPendingJobFetchInterval)
+
 		// check for pending jobs on an interval until the context is canceled
 		for {
-			jobIDs, err := p.getPendingJobIDs(ctx, conn, queue)
+			pendingJobs, err := p.getPendingJobs(ctx, conn)
 			if errors.Is(err, context.Canceled) {
 				return
 			}
 
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				p.logger.Error(
-					"failed to fetch pending job",
-					slog.String("queue", queue),
+					"failed to fetch pending jobs",
 					slog.Any("error", err),
 				)
 			}
 
-			for _, jid := range jobIDs {
-				jobsCh <- &pgconn.Notification{Channel: queue, Payload: jid}
+			for _, job := range pendingJobs {
+				p.announceJob(ctx, job.Queue, fmt.Sprint(job.ID))
 			}
 			select {
 			case <-ctx.Done():
@@ -867,9 +860,6 @@ func (p *PgBackend) processPendingJobs(ctx context.Context, queue string) (jobsC
 			}
 		}
 	}(ctx)
-
-	jobsCh = make(chan *pgconn.Notification)
-	return jobsCh
 }
 
 // handleJob is the workhorse of Neoq
@@ -955,9 +945,6 @@ func (p *PgBackend) handleJob(ctx context.Context, jobID string) (err error) {
 }
 
 // listen uses Postgres LISTEN to listen for jobs on a queue
-// TODO: There is currently no handling of listener disconnects in PgBackend.
-// This will lead to jobs not getting processed until the worker is restarted.
-// Implement disconnect handling.
 func (p *PgBackend) listen(ctx context.Context) (c chan *pgconn.Notification, errCh chan error) {
 	c = make(chan *pgconn.Notification)
 	errCh = make(chan error)
@@ -1041,17 +1028,17 @@ func (p *PgBackend) getJob(ctx context.Context, tx pgx.Tx, jobID string) (job *j
 	return
 }
 
-func (p *PgBackend) getPendingJobIDs(ctx context.Context, conn *pgxpool.Conn, queue string) (jobIDs []string, err error) {
-	var rows pgx.Rows
-	var jid int64
-	rows, err = conn.Query(ctx, PendingJobIDsQuery, queue)
-	for rows.Next() {
-		err = rows.Scan(&jid)
-		if err != nil {
-			return
-		}
-		jobIDs = append(jobIDs, fmt.Sprint(jid))
+func (p *PgBackend) getPendingJobs(ctx context.Context, conn *pgxpool.Conn) (pendingJobs []*jobs.Job, err error) {
+	rows, err := conn.Query(ctx, PendingJobsQuery)
+	if err != nil {
+		return
 	}
+
+	pendingJobs, err = pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[jobs.Job])
+	if err != nil {
+		return
+	}
+
 	return
 }
 
