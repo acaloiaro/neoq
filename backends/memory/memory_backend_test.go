@@ -3,6 +3,7 @@ package memory_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -18,7 +19,6 @@ import (
 	"github.com/acaloiaro/neoq/testutils"
 	"github.com/pkg/errors"
 	"github.com/robfig/cron"
-	"golang.org/x/exp/slog"
 )
 
 const (
@@ -75,7 +75,7 @@ func TestBasicJobProcessing(t *testing.T) {
 				},
 			})
 			if e != nil || jid == jobs.DuplicateJobID {
-				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", e)
+				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", "error", e)
 			}
 		}
 	}()
@@ -149,7 +149,7 @@ func TestBackendConfiguration(t *testing.T) {
 				},
 			})
 			if e != nil || jid == jobs.DuplicateJobID {
-				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", e)
+				slog.Error("job was not enqueued. either it was duplicate or this error caused it:", "error", e)
 			}
 		}
 

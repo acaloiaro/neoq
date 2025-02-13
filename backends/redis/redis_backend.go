@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -20,7 +21,6 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/iancoleman/strcase"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
-	"golang.org/x/exp/slog"
 )
 
 // All jobs are placed on the same 'default' queue (until a compelling case is made for using different asynq queues
