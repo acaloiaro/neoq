@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
-
-	"golang.org/x/exp/slog"
 )
 
 const (

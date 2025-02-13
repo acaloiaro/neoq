@@ -79,9 +79,6 @@ schema = 3
   [mod."golang.org/x/crypto"]
     version = "v0.31.0"
     hash = "sha256-ZBjoG7ZOuTEmjaXPP9txAvjAjC46DeaLs0zrNzi8EQw="
-  [mod."golang.org/x/exp"]
-    version = "v0.0.0-20230713183714-613f0c0eb8a1"
-    hash = "sha256-VLE9CCOYpTdyBWaQ1YxXpGOBS74wpIR3JJ+JVzNyEkQ="
   [mod."golang.org/x/sync"]
     version = "v0.10.0"
     hash = "sha256-HWruKClrdoBKVdxKCyoazxeQV4dIYLdkHekQvx275/o="

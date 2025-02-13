@@ -1,7 +1,7 @@
 package logging
 
 import (
-	"golang.org/x/exp/slog"
+	"log/slog"
 )
 
 // Logger interface is the interface that neoq's logger must implement

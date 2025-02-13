@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -17,7 +18,6 @@ import (
 	"github.com/iancoleman/strcase"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 	"github.com/robfig/cron"
-	"golang.org/x/exp/slog"
 )
 
 const (
