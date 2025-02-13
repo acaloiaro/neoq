@@ -32,7 +32,7 @@
             packages = with pkgs; [
               automake
               gcc
-              go_1_24
+              go_1_23
               gomod2nix.legacyPackages.${system}.gomod2nix
               gotools
               golangci-lint
