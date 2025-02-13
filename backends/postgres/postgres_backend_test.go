@@ -1144,25 +1144,26 @@ func TestProcessPendingJobs(t *testing.T) {
 
 	ctx := context.Background()
 
-	// INSERTing jobs into the job queue before noeq is listening on any queues ensures that the new job is not announced, and when
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString), neoq.WithPendingJobCheckInterval(time.Duration(50*time.Millisecond)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	// Adding jobs into the job queue before noeq is listening on any queues ensures that the new job is not announced, and when
 	// neoq _is_ started, that there is a pending jobs waiting to be processed
 	payload := map[string]interface{}{
 		"message": "hello world",
 	}
 	var pendingJobID string
-	err := conn.QueryRow(ctx, `INSERT INTO neoq_jobs(queue, fingerprint, payload, run_after, deadline, max_retries)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		queue, "dummy", payload, time.Now().UTC(), nil, 1).Scan(&pendingJobID)
+	pendingJobID, err = nq.Enqueue(ctx, &jobs.Job{
+		Queue:   queue,
+		Payload: payload,
+	})
 	if err != nil {
 		t.Error(fmt.Errorf("unable to add job to queue: %w", err))
 		return
 	}
-
-	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer nq.Shutdown(ctx)
 
 	h := handler.New(queue, func(_ context.Context) (err error) {
 		return
