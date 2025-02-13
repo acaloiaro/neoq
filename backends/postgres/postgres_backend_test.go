@@ -1144,7 +1144,11 @@ func TestProcessPendingJobs(t *testing.T) {
 
 	ctx := context.Background()
 
-	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString), neoq.WithPendingJobCheckInterval(50*time.Millisecond))
+	nq, err := neoq.New(ctx,
+		neoq.WithBackend(postgres.Backend),
+		postgres.WithConnectionString(connString),
+		neoq.WithPendingJobCheckInterval(50*time.Millisecond),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
