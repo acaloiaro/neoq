@@ -115,9 +115,7 @@ linters:
     - errchkjson
     - errname
     - errorlint
-    - execinquery
     - exhaustive
-    - exportloopref
     - funlen
     - gci
     - gocognit
@@ -125,11 +123,11 @@ linters:
     - gocritic
     - gocyclo
     # - godox
-    - goerr113
+    - err113
     - gofmt
     - goheader
     - goimports
-    - gomnd
+    - mnd
     - gomoddirectives
     - gomodguard
     - goprintffuncname
@@ -160,7 +158,6 @@ linters:
     - sqlclosecheck
     - staticcheck
     - stylecheck
-    - tenv
     - testableexamples
     #- testpackage
     - thelper
