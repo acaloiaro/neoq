@@ -18,7 +18,7 @@ const (
 	DefaultPendingJobFetchInterval = 60 * time.Second
 	// the window of time between time.Now() and when a job's RunAfter comes due that neoq will schedule a goroutine to
 	// schdule the job for execution.
-	// E.g. right now is 16:00 and a job's RunAfter is 16:30 of the same date. This job will get a dedicated goroutine
+	// E.g. right now is 16:00:00 and a job's RunAfter is 16:00:30 of the same date. This job will get a dedicated goroutine
 	// to wait until the job's RunAfter, scheduling the job to be run exactly at RunAfter
 	DefaultFutureJobWindow  = 30 * time.Second
 	DefaultJobCheckInterval = 1 * time.Second
@@ -32,18 +32,19 @@ var ErrBackendNotSpecified = errors.New("a backend must be specified")
 // backends. [BackendConcurrency], for example, is only used by the redis backend. Other backends manage concurrency on a
 // per-handler basis.
 type Config struct {
-	BackendInitializer     BackendInitializer
-	BackendAuthPassword    string                   // password with which to authenticate to the backend
-	BackendConcurrency     int                      // total number of backend processes available to process jobs
-	ConnectionString       string                   // a string containing connection details for the backend
-	JobCheckInterval       time.Duration            // the interval of time between checking for new future/past-due jobs
-	FutureJobWindow        time.Duration            // time duration between current time and job.RunAfter that future jobs get scheduled
-	IdleTransactionTimeout int                      // number of milliseconds PgBackend transaction may idle before the connection is killed
-	ShutdownTimeout        time.Duration            // duration to wait for jobs to finish during shutdown
-	SynchronousCommit      bool                     // Postgres: Enable synchronous commits (increases durability, decreases performance)
-	LogLevel               logging.LogLevel         // the log level of the default logger
-	PGConnectionTimeout    time.Duration            // the amount of time to wait for a connection to become available before timing out
-	RecoveryCallback       handler.RecoveryCallback // the recovery handler applied to all Handlers excuted by the associated Neoq instance
+	BackendInitializer      BackendInitializer
+	BackendAuthPassword     string                   // password with which to authenticate to the backend
+	BackendConcurrency      int                      // total number of backend processes available to process jobs
+	ConnectionString        string                   // a string containing connection details for the backend
+	JobCheckInterval        time.Duration            // the interval of time between checking for new future jobs
+	PendingJobCheckInterval time.Duration            // duration of time between checking for unprocessed jobs due to downtime/db disconnects
+	FutureJobWindow         time.Duration            // time duration between current time and job.RunAfter that future jobs get scheduled
+	IdleTransactionTimeout  int                      // number of milliseconds PgBackend transaction may idle before the connection is killed
+	ShutdownTimeout         time.Duration            // duration to wait for jobs to finish during shutdown
+	SynchronousCommit       bool                     // Postgres: Enable synchronous commits (increases durability, decreases performance)
+	LogLevel                logging.LogLevel         // the log level of the default logger
+	PGConnectionTimeout     time.Duration            // the amount of time to wait for a connection to become available before timing out
+	RecoveryCallback        handler.RecoveryCallback // the recovery handler applied to all Handlers excuted by the associated Neoq instance
 }
 
 // ConfigOption is a function that sets optional backend configuration
@@ -136,6 +137,17 @@ func WithRecoveryCallback(cb handler.RecoveryCallback) ConfigOption {
 func WithJobCheckInterval(interval time.Duration) ConfigOption {
 	return func(c *Config) {
 		c.JobCheckInterval = interval
+	}
+}
+
+// WithPendingJobCheckInterval configures the duration of time between checking for unprocessed jobs on watched queues.
+//
+// Pending jobs are jobs that were queued while neoq wasn't listening or while a disconnect occurred. Most jobs are
+// processed via Postgres' LISTEN/NOTIFY facilities. This check interval is a last resort and does not need to be short.
+// Be careful not to hammer your database by setting this too low.
+func WithPendingJobCheckInterval(interval time.Duration) ConfigOption {
+	return func(c *Config) {
+		c.PendingJobCheckInterval = interval
 	}
 }
 

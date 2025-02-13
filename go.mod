@@ -1,6 +1,6 @@
 module github.com/acaloiaro/neoq
 
-go 1.21
+go 1.24.0
 
 require (
 	github.com/golang-migrate/migrate/v4 v4.16.2

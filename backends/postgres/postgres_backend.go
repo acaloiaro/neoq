@@ -5,8 +5,12 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"net/url"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,8 +30,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
 	"github.com/robfig/cron"
-	"golang.org/x/exp/slices"
-	"golang.org/x/exp/slog"
 )
 
 //go:embed migrations/*.sql
@@ -46,6 +48,7 @@ const (
 	PendingJobsQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE status NOT IN ('processed')
+					AND queue IN ($1)
 					AND run_after <= NOW()
 					ORDER BY created_at ASC
 					FOR UPDATE SKIP LOCKED
@@ -220,16 +223,13 @@ func (p *PgBackend) listenerManager(ctx context.Context) {
 			p.listenerConnMu.Lock()
 			p.listenerConn = lc
 			p.mu.Lock()
-			handlers := p.handlers
-			p.mu.Unlock()
-
-			for queue := range handlers {
+			for queue := range p.handlers {
 				_, err = p.listenerConn.Exec(ctx, fmt.Sprintf(`LISTEN %q`, queue))
 				if err != nil {
 					p.logger.Error("unable to listen on queue", slog.Any("error", err), slog.String("queue", queue))
 				}
 			}
-
+			p.mu.Unlock()
 			p.listenerConnMu.Unlock()
 
 			p.logger.Debug("worker database connection established")
@@ -835,6 +835,9 @@ func (p *PgBackend) announceJob(ctx context.Context, queue, jobID string) {
 
 // processPendingJobs starts a goroutine that periodically fetches pendings jobs and announces them to workers.
 //
+// The interval for this task does not need to be particularly short unless an application suffers frequent database
+// disconnects, as most pending jobs are picked up by LISTEN after being announced with NOTIFY.
+//
 // Past due jobs are fetched on the interval [neoq.DefaultPendingJobFetchInterval]
 // nolint: cyclop
 func (p *PgBackend) processPendingJobs(ctx context.Context) {
@@ -842,7 +845,12 @@ func (p *PgBackend) processPendingJobs(ctx context.Context) {
 		var err error
 		var conn *pgxpool.Conn
 		var pendingJobs []*jobs.Job
-		ticker := time.NewTicker(neoq.DefaultPendingJobFetchInterval)
+		var ticker *time.Ticker
+		if p.config.PendingJobCheckInterval > 0 {
+			ticker = time.NewTicker(p.config.PendingJobCheckInterval)
+		} else {
+			ticker = time.NewTicker(neoq.DefaultPendingJobFetchInterval)
+		}
 
 		// check for pending jobs on an interval until the context is canceled
 		for {
@@ -1044,7 +1052,11 @@ func (p *PgBackend) getJob(ctx context.Context, tx pgx.Tx, jobID string) (job *j
 }
 
 func (p *PgBackend) getPendingJobs(ctx context.Context, conn *pgxpool.Conn) (pendingJobs []*jobs.Job, err error) {
-	rows, err := conn.Query(ctx, PendingJobsQuery)
+	p.mu.Lock()
+	// convert watched queue map to string: "'queue1', 'queue2', ..." for use in Postgres IN statement
+	activeQueues := slices.Collect(maps.Keys(p.handlers))
+	p.mu.Unlock()
+	rows, err := conn.Query(ctx, PendingJobsQuery, strings.Join(activeQueues, ","))
 	if err != nil {
 		return
 	}
