@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -48,7 +47,7 @@ const (
 	PendingJobsQuery = `SELECT id,fingerprint,queue,status,deadline,payload,retries,max_retries,run_after,ran_at,created_at,error
 					FROM neoq_jobs
 					WHERE status NOT IN ('processed')
-					AND queue IN ($1)
+					AND QUEUE = ANY($1)
 					AND run_after <= NOW()
 					ORDER BY created_at ASC
 					FOR UPDATE SKIP LOCKED
@@ -1056,7 +1055,7 @@ func (p *PgBackend) getPendingJobs(ctx context.Context, conn *pgxpool.Conn) (pen
 	// convert watched queue map to string: "'queue1', 'queue2', ..." for use in Postgres IN statement
 	activeQueues := slices.Collect(maps.Keys(p.handlers))
 	p.mu.Unlock()
-	rows, err := conn.Query(ctx, PendingJobsQuery, strings.Join(activeQueues, ","))
+	rows, err := conn.Query(ctx, PendingJobsQuery, activeQueues)
 	if err != nil {
 		return
 	}

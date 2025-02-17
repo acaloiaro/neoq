@@ -1138,6 +1138,7 @@ func TestHandlerRecoveryCallback(t *testing.T) {
 func TestProcessPendingJobs(t *testing.T) {
 	connString, conn := prepareAndCleanupDB(t)
 	const queue = "testing"
+	const queue2 = "testing2"
 	timeoutTimer := time.After(5 * time.Second)
 	done := make(chan bool)
 	defer close(done)
@@ -1173,8 +1174,18 @@ func TestProcessPendingJobs(t *testing.T) {
 		return
 	})
 
+	h2 := handler.New(queue2, func(_ context.Context) (err error) {
+		return
+	})
+
 	// Start ensures that pending jobs will be processed
 	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Start listening on a second queued to make sure that pending jobs can be pulled from multiple queues
+	err = nq.Start(ctx, h2)
 	if err != nil {
 		t.Error(err)
 	}
