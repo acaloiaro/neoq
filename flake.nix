@@ -57,7 +57,7 @@
 
             services = {
               postgres = {
-                package = pkgs.postgresql;
+                package = pkgs.postgresql_15;
                 enable = true;
                 listen_addresses = "127.0.0.1";
                 port = postgresPort;
