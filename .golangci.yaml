@@ -1,76 +1,12 @@
----
+version: "2"
 run:
   concurrency: 12
-  timeout: 1m
+  build-tags:
+    - testing
+  modules-download-mode: vendor
   issues-exit-code: 1
   tests: true
-  # list of build tags, all linters use it. Default is empty list.
-  build-tags: ['testing']
-
-  # by default isn't set. If set we pass it to "go list -mod={option}". From "go help modules":
-  # If invoked with -mod=readonly, the go command is disallowed from the implicit
-  # automatic updating of go.mod described above. Instead, it fails when any changes
-  # to go.mod are needed. This setting is most useful to check that go.mod does
-  # not need updates, such as in a continuous integration and testing system.
-  # If invoked with -mod=vendor, the go command assumes that the vendor
-  # directory holds the correct copies of dependencies and ignores
-  # the dependency descriptions in go.mod.
-  modules-download-mode: vendor
-
-# output configuration options
-output:
-  # print lines of code with issue, default is true
-  print-issued-lines: true
-
-  # print linter name in the end of issue text, default is true
-  print-linter-name: true
-
-
-#It's a .golangci.yml config file of this repo: we enable more linters than the default and have more strict settings:
-
-linters-settings:
-  dupl:
-    threshold: 100
-  funlen:
-    lines: 100
-    statements: 50
-  goconst:
-    min-len: 2
-    min-occurrences: 2
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - ifElseChain
-      - octalLiteral
-      - unnamedResult
-      - whyNoLint
-      - wrapperFunc
-  gocyclo:
-    min-complexity: 15
-  goimports:
-    local-prefixes: github.com/golangci/golangci-lint
-  govet:
-    settings:
-      printf:
-        funcs:
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
-  lll:
-    line-length: 140
-  misspell:
-    locale: US
-
 linters:
-  # please, do not use `enable-all`: it's deprecated and will be removed soon.
-  # inverted configuration with `enable-all` and `disable` is not scalable during updates of golangci-lint
-  #disable-all: true
   enable:
     - asasalint
     - asciicheck
@@ -84,39 +20,30 @@ linters:
     - dupl
     - dupword
     - durationcheck
-    - errcheck
+    - err113
     - errchkjson
     - errname
     - errorlint
     - exhaustive
     - funlen
-    - gci
     - gocognit
     - goconst
     - gocritic
     - gocyclo
-    # - godox
-    - err113
-    - gofmt
     - goheader
-    - goimports
-    - mnd
     - gomoddirectives
     - gomodguard
     - goprintffuncname
     - gosec
-    - gosimple
-    - govet
     - grouper
     - importas
-    - ineffassign
     - interfacebloat
-    #- ireturn
     - lll
     - loggercheck
     - maintidx
     - makezero
     - misspell
+    - mnd
     - nestif
     - nilerr
     - nilnil
@@ -130,27 +57,80 @@ linters:
     - rowserrcheck
     - sqlclosecheck
     - staticcheck
-    - stylecheck
     - testableexamples
-    #- testpackage
     - thelper
     - unconvert
     - unparam
-    - unused
     - usestdlibvars
     - wastedassign
     - whitespace
     - wrapcheck
-
-  # don't enable:
-
-issues:
-  exclude:
-    - 'shadow: declaration of "err" shadows declaration at'
-  # Excluding configuration per-path, per-linter, per-text and per-source
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - funlen
-        - cyclop
-
+  settings:
+    dupl:
+      threshold: 100
+    funlen:
+      lines: 100
+      statements: 50
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - octalLiteral
+        - unnamedResult
+        - whyNoLint
+        - wrapperFunc
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+    gocyclo:
+      min-complexity: 15
+    govet:
+      settings:
+        printf:
+          funcs:
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+    lll:
+      line-length: 140
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - cyclop
+          - funlen
+        path: _test\.go
+      - path: (.+)\.go$
+        text: 'shadow: declaration of "err" shadows declaration at'
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/golangci/golangci-lint
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
