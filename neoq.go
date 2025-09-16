@@ -72,6 +72,9 @@ type Neoq interface {
 	// Enqueue queues jobs to be executed asynchronously
 	Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error)
 
+	// Enqueue queues jobs to be executed asynchronously
+	EnqueueTx(ctx context.Context, tx Tx, job *jobs.Job) (jobID string, err error)
+
 	// Start starts processing jobs on the queue specified in the Handler
 	Start(ctx context.Context, h handler.Handler) (err error)
 
@@ -85,6 +88,30 @@ type Neoq interface {
 
 	// Shutdown halts job processing and releases resources
 	Shutdown(ctx context.Context)
+}
+
+// Tx is neoq's generic transaction interface.
+//
+// This interface's purpose is to enable interoperability with external library
+// transaction types. By being a small (but common) subset of the ususal transaction
+// type methods, this interface allows transactions from multiple libraries to become
+// become compatible with Tx.
+//
+// This interface is compatible with the following libraries' transaction types:
+// - pgx: This interface is a subset of pgx's Tx type, so it is fully compatible
+// - sql: Use helper function tx.FromStdTx to get a Tx from sql.Tx
+type Tx interface {
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
+	QueryRow(ctx context.Context, query string, args ...any) Row
+}
+
+// Row interface is the subset of both pgx.Row and sql.Row needed by neoq to enqueue
+// jobs useing either's Tx type.
+//
+// It is the return type of neoq.Tx.QueryRow, to be used as a generic row type
+type Row interface {
+	Scan(dest ...any) error
 }
 
 // New creates a new backend instance for job processing.

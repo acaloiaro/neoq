@@ -178,6 +178,11 @@ func WithShutdownTimeout(timeout time.Duration) neoq.ConfigOption {
 	}
 }
 
+// Enqueue adds jobs to the specified queue
+func (p *RedisBackend) EnqueueTx(ctx context.Context, tx neoq.Tx, job *jobs.Job) (jobID string, err error) {
+	panic("this backend does not implement enqueueing jobs transactionally")
+}
+
 // Enqueue queues jobs to be executed asynchronously
 func (b *RedisBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
 	if job.Queue == "" {

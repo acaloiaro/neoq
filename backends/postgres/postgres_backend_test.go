@@ -14,6 +14,7 @@ import (
 
 	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/backends/postgres"
+	nqpgxtx "github.com/acaloiaro/neoq/backends/postgres/tx/pgx"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
@@ -152,6 +153,84 @@ func TestBasicJobProcessing(t *testing.T) {
 	}
 }
 
+// TestBasicJobProcessingWithTransaction tests that the postgres backend is able to process the most basic jobs with the
+// most basic configuration, inside a transaction.
+func TestBasicJobProcessingWithTransaction(t *testing.T) {
+	connString, conn := prepareAndCleanupDB(t)
+	const queue = "testing"
+	maxRetries := 5
+	done := make(chan bool)
+	defer close(done)
+
+	timeoutTimer := time.After(5 * time.Second)
+
+	ctx := context.Background()
+	nq, err := neoq.New(ctx, neoq.WithBackend(postgres.Backend), postgres.WithConnectionString(connString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nq.Shutdown(ctx)
+
+	h := handler.New(queue, func(_ context.Context) (err error) {
+		done <- true
+		return
+	})
+
+	err = nq.Start(ctx, h)
+	if err != nil {
+		t.Error(err)
+	}
+
+	ptx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Error(err)
+	}
+
+	tx := nqpgxtx.FromPgx(ptx)
+	deadline := time.Now().UTC().Add(5 * time.Second)
+	jid, e := nq.EnqueueTx(ctx, tx, &jobs.Job{
+		Queue: queue,
+		Payload: map[string]any{
+			"message": "hello world",
+		},
+		Deadline:   &deadline,
+		MaxRetries: &maxRetries,
+	})
+	if e != nil || jid == jobs.DuplicateJobID {
+		t.Error(e)
+	}
+
+	select {
+	case <-timeoutTimer:
+		err = jobs.ErrJobTimeout
+	case <-done:
+	}
+	if err != nil {
+		t.Error(err)
+	}
+
+	// ensure job has fields set correctly
+	var jdl time.Time
+	var jmxrt int
+
+	err = conn.
+		QueryRow(context.Background(), "SELECT deadline,max_retries FROM neoq_jobs WHERE id = $1", jid).
+		Scan(&jdl, &jmxrt)
+	if err != nil {
+		t.Error(err)
+	}
+
+	jdl = jdl.In(time.UTC)
+	// dates from postgres come out with only 6 decimal places of millisecond precision, naively format dates as
+	// strings for comparison reasons. Ref https://www.postgresql.org/docs/current/datatype-datetime.html
+	if jdl.Format(time.RFC3339) != deadline.Format(time.RFC3339) {
+		t.Error(fmt.Errorf("job deadline does not match its expected value: %v != %v", jdl, deadline)) // nolint: goerr113
+	}
+
+	if jmxrt != maxRetries {
+		t.Error(fmt.Errorf("job MaxRetries does not match its expected value: %v != %v", jmxrt, maxRetries)) // nolint: goerr113
+	}
+}
 func TestMultipleProcessors(t *testing.T) {
 	const queue = "testing"
 	var execCount uint32

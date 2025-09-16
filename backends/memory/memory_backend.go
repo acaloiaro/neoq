@@ -66,6 +66,11 @@ func Backend(_ context.Context, opts ...neoq.ConfigOption) (backend neoq.Neoq, e
 	return
 }
 
+// Enqueue adds jobs to the specified queue
+func (p *MemBackend) EnqueueTx(ctx context.Context, tx neoq.Tx, job *jobs.Job) (jobID string, err error) {
+	panic("this backend does not implement enqueueing jobs transactionally")
+}
+
 // Enqueue queues jobs to be executed asynchronously
 func (m *MemBackend) Enqueue(_ context.Context, job *jobs.Job) (jobID string, err error) {
 	var queueChan chan *jobs.Job

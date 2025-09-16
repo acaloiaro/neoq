@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/acaloiaro/neoq"
+	nqpgxtx "github.com/acaloiaro/neoq/backends/postgres/tx/pgx"
 	"github.com/acaloiaro/neoq/handler"
 	"github.com/acaloiaro/neoq/internal"
 	"github.com/acaloiaro/neoq/jobs"
@@ -400,8 +401,18 @@ func (p *PgBackend) initializeDB() (err error) {
 	return nil
 }
 
+// Enqueue adds jobs to the specified queue using the provided database transaction
+func (p *PgBackend) EnqueueTx(ctx context.Context, tx neoq.Tx, job *jobs.Job) (jobID string, err error) {
+	return p.enqueue(ctx, tx, job)
+}
+
 // Enqueue adds jobs to the specified queue
 func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, err error) {
+	return p.enqueue(ctx, nil, job)
+}
+
+// Enqueue adds jobs to the specified queue
+func (p *PgBackend) enqueue(ctx context.Context, tx neoq.Tx, job *jobs.Job) (jobID string, err error) {
 	if job.Queue == "" {
 		err = jobs.ErrNoQueueSpecified
 		return
@@ -417,11 +428,15 @@ func (p *PgBackend) Enqueue(ctx context.Context, job *jobs.Job) (jobID string, e
 	}
 	defer conn.Release()
 
-	p.logger.Debug("beginning new transaction to enqueue job", slog.String("queue", job.Queue))
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		err = fmt.Errorf("error creating transaction: %w", err)
-		return
+	if tx == nil {
+		p.logger.Debug("beginning new transaction to enqueue job", slog.String("queue", job.Queue))
+		pgxtx, err := p.pool.Begin(ctx)
+		if err != nil {
+			err = fmt.Errorf("error creating transaction: %w", err)
+			return "", err
+		}
+
+		tx = nqpgxtx.FromPgx(pgxtx)
 	}
 
 	// Rollback is safe to call even if the tx is already closed, so if
@@ -580,7 +595,7 @@ func (p *PgBackend) Shutdown(ctx context.Context) {
 //
 // Jobs that are not already fingerprinted are fingerprinted before being added
 // Duplicate jobs are not added to the queue. Any two unprocessed jobs with the same fingerprint are duplicates
-func (p *PgBackend) enqueueJob(ctx context.Context, tx pgx.Tx, j *jobs.Job) (jobID string, err error) {
+func (p *PgBackend) enqueueJob(ctx context.Context, tx neoq.Tx, j *jobs.Job) (jobID string, err error) {
 	err = jobs.FingerprintJob(j)
 	if err != nil {
 		return
