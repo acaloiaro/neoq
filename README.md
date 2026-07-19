@@ -1,3 +1,5 @@
+**NOTICE**: This repository has been moved to [https://code.adriano.fyi/me/neoq](https://code.adriano.fyi/me/neoq). Microsoft has shown little interest in stewarding what was once the best and largest open source community. This small act of migration is my way showing that we don't all support Microsoft's disinterest.
+
 # Neoq
 
 Queue-agnostic background job library for Go, with a pleasant API and powerful features.
