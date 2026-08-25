@@ -1,2 +1,9 @@
 ALTER TABLE neoq_jobs ALTER COLUMN id SET DATA TYPE integer;
-ALTER SEQUENCE public.neoq_jobs_id_seq AS integer;
+DO $$
+DECLARE
+	seq regclass := pg_get_serial_sequence('neoq_jobs', 'id');
+BEGIN
+	IF seq IS NOT NULL THEN
+		EXECUTE format('ALTER SEQUENCE %s AS integer', seq);
+	END IF;
+END $$;
